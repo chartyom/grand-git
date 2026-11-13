@@ -1,0 +1,54 @@
+schema: spec-driven
+
+context: |
+  Language: English.
+  Write repository artifacts in English, except README.ru.md and Russian localization resources or compatibility fixtures.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  Grand Git is a Go 1.26 CLI named gg for Linux/WSL2 and macOS, using Git worktrees and tmux.
+  Canonical repository: https://github.com/chartyom/grand-git; Go module: github.com/chartyom/grand-git.
+  The installer defaults to chartyom/grand-git; GG_REPOSITORY can override it.
+  Read openspec/project.md and the affected main specs before making changes.
+  Invoking gg without a subcommand displays help; dashboard is opened explicitly.
+  Git creation prompts only for a missing required branch; ordinary directory names are optional.
+  Template picking is explicitly opt-in.
+  Creation copies Git-ignored local files except shared .gg; --no-copy opts out.
+  YAML settings/templates live globally or in the primary worktree .gg, shared across worktrees.
+  Legacy TOML migrates per layer on first write. Named templates run after registry commit.
+  Source and existing protected worktrees cannot be deleted through gg, even with --force.
+  Dashboard opens saved folder sections with list focus, no terminal, no temporary session and no automatic cwd registration.
+  Q and disconnection preserve persistent sessions; legacy clients retain their invocation-owned temporary cleanup.
+  Ctrl+W cycles dashboard panels; Ctrl+G, ordinary arrows, Tab and Ctrl+P belong to terminal applications.
+  Session IDs are globally unique group:session strings; exact branches also address the current Git project.
+  List and dashboard aggregate all known Git projects and ordinary directories. Description is absent.
+  Default UI language is English; Russian is configurable.
+  Public API changes require the project Codex skill-maintainer role.
+  User-requested behavior takes precedence over older specs.
+  Agent hooks are project-local; never auto-trust Codex hooks.
+  Keep only current specifications, context and verification evidence in OpenSpec.
+  Plans stay in chat. Create change directories and proposal/design/tasks/delta materials only on explicit user request.
+  Ordinary implementation updates main specs and a compact verification report directly.
+  No automatic source session is registered; running legacy sources remain until stopped.
+  Selectable exact-path sections contain mixed worktree and terminal rows; single click opens and right-click shows target actions.
+  Plus opens the folder browser; Ctrl+S adds a section; X removes only an empty section without deleting files or workspace records.
+  Folder T creates a persistent shell at its exact path; S/D confirm fixed section targets with deletion preflight and protected directories.
+  CLI create assigns its exact cwd section; public IDs and workspace-wide CLI --all retain their existing semantics.
+  Search is available only above ten rows after the activity filter; editing has dedicated Clear and Down-to-list controls.
+  Consolidate and remove completed or superseded change records if explicitly requested.
+  Keep assistant opinions, speculative caveats and work-status notes in terminal/chat responses.
+
+rules:
+  proposal:
+    - Identify affected capabilities and state which work remains out of scope.
+  specs:
+    - Describe observable behavior using SHALL requirements and WHEN/THEN scenarios.
+    - Specify implemented behavior; exclude planned features.
+  tasks:
+    - Include verification against affected specs, tests, documentation sync, and an explicit verification report.
+
+operations:
+  apply:
+    guidance:
+      - After every completed plan, compare implementation against affected requirements and scenarios.
+      - Update main specs and documentation for authorized changes; do not rewrite specs to conceal defects.
+      - Record actual evidence in openspec/verification.md; report unperformed checks in the terminal/chat response.
+      - After synchronization, remove completed or superseded change directories; retain only active work.

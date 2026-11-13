@@ -1,0 +1,39 @@
+version: 2
+project_name: grand-git
+builds:
+  - id: gg
+    main: ./cmd/gg
+    binary: gg
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X github.com/chartyom/grand-git/internal/gg.Version={{ .Version }} -X github.com/chartyom/grand-git/internal/gg.Commit={{ .FullCommit }} -X github.com/chartyom/grand-git/internal/gg.BuildDate={{ .Date }}
+archives:
+  - id: binaries
+    ids: [gg]
+    formats: [tar.gz]
+    name_template: 'grand-git_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      - README.md
+      - README.ru.md
+      - docs/usage.md
+      - docs/templates.md
+      - docs/installation.md
+      - docs/assets/gg-demo.gif
+      - docs/assets/gg-demo.png
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+release:
+  github:
+    owner: chartyom
+    name: grand-git
+  draft: true
+  extra_files:
+    - glob: scripts/install.sh
+      name_template: install.sh
+changelog:
+  use: git

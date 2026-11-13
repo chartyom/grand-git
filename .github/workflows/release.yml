@@ -1,0 +1,42 @@
+name: Prepare release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+  package:
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.10.2
+          args: check
+      - name: Build and stage release
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            goreleaser release --clean
+          else
+            goreleaser release --snapshot --clean
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Include installer in review artifacts
+        run: cp scripts/install.sh dist/install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grand-git-release
+          path: dist/
