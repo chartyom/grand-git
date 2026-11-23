@@ -35,6 +35,7 @@ gg dashboard
 ```
 
 - Inside Git, `create [branch]` creates a worktree and a terminal running the selected startup template in the background, prints the branch, path and template, and returns control. The default is `shell`; configured templates can launch agents or other applications. Use dashboard to reach the terminal. Success means the terminal was created, not that its application succeeded.
+- During worktree creation, a Git `post-checkout` hook can use `gg list --json` to read previously registered sessions. The new session appears after checkout and terminal setup succeed. Creation waits for the hook itself to finish and can return while its background processes continue. When using v1.0.0, run the list query after `gg create` returns because that version holds the catalog lock during checkout.
 - Inside Git, only an omitted branch is required in a terminal form; provide it explicitly without a TTY. Tab optionally opens the template picker; Esc outside the picker cancels the form. Supplying a branch avoids questions unless `--choose-template` is requested. That flag requires both stdin and stdout TTY, is incompatible with `--template`, and opens the picker explicitly. With a supplied branch, Enter confirms and creates without another form; Esc cancels creation. Without a branch, it remains required after template selection.
 - A new branch starts at the calling worktree's HEAD, or at the explicit `--base` branch/commit. An existing free branch can be attached without `--base`; combining an existing branch with `--base` is rejected. A branch checked out elsewhere cannot be taken over.
 - A registered branch cannot be created again, even when stopped. Use `start` or open it in dashboard.
@@ -133,6 +134,8 @@ Q or disconnection from a legacy dashboard closes only that invocation's tempora
 ## Dashboard
 
 `gg dashboard` runs in the calling interactive terminal, including inside an existing tmux pane. It starts with list focus and saved folder sections, without creating a session, opening a terminal or registering the calling directory. An empty dashboard starts no project tmux server. The calling directory only supplies the folder browser's initial path. Explicitly create or open a session to display its terminal. One dashboard process keeps its list state across workspace switches and preserves existing user terminal processes. Each tmux pane title appears above its terminal content. A green status line below the panes shows the current project, active/total session count and Ctrl+W hint, including in compact windows.
+
+The saved list is usable while Git status updates. A detached worktree sidebar resumes Git status polling when a client displays its window.
 
 Folder sections refer to exact canonical directories. A Git project root and its subdirectories can have separate sections while sharing the same workspace, registry, server and public IDs. Existing workspace catalogs migrate once to root sections; existing records keep their paths, IDs and processes. Section IDs are internal and do not replace the workspace IDs from `gg list --json`.
 

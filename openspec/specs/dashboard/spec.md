@@ -33,6 +33,14 @@ New dashboard invocations SHALL keep one gg TUI process across project switches 
 - **WHEN** opening a task in another project fails
 - **THEN** the dashboard remains open on the previous task and shows the error
 
+### Requirement: Session list startup and background refresh
+The first session list SHALL be usable before fresh Git status checks complete. Reading existing folder sections SHALL use the committed catalog during concurrent session creation. Each sidebar SHALL have at most one periodic refresh in flight. Detached worktree panes SHALL resume session and Git refreshes when a client displays their window.
+
+#### Scenario: Launch while worktrees are active in the background
+- **WHEN** a user opens a dashboard with existing folder sections and detached worktrees
+- **THEN** the saved sessions are available for selection while Git status loads
+- **AND** detached worktree sidebars do not each scan the Git projects
+
 ### Requirement: Terminal pane titles and status line
 The dashboard SHALL show each tmux pane title above its contents and a green status line with the current project and activity count at the bottom. Both SHALL remain visible at compact width.
 

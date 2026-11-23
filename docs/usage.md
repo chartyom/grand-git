@@ -21,6 +21,8 @@ Without `--base`, new branches start at the calling worktree's HEAD. An existing
 
 New folders use `<project>__sessions/<branch>`, preserving slashes. Existing paths are not moved. Creation starts the terminal in the background and returns without waiting for application success. Bare repositories are unsupported.
 
+Git checkout hooks run during worktree creation. A hook can use `gg list --json` to inspect committed sessions. Once the hook exits, a background process it started can keep running while `gg create` finishes setting up the new terminal.
+
 Outside Git, `gg create [name]` creates a persistent terminal in the current directory. No name or branch prompt is required; the default name is the directory name and duplicate names are allowed. `--base` and `--no-copy` require Git. Deleting a directory session only removes processes and registration, preserving all its files, even if the folder later becomes a Git repository.
 
 Groups are recorded under `$XDG_STATE_HOME/grand-git` when `XDG_STATE_HOME` is an absolute path, or `~/.local/state/grand-git` otherwise. Git worktrees share one group; ordinary directories have separate groups. An existing project with older gg session records joins the catalog when you run a workspace command such as `gg list` there.

@@ -1,6 +1,10 @@
 package gg
 
-import "path/filepath"
+import (
+	"path/filepath"
+
+	"golang.org/x/sys/unix"
+)
 
 // Git discovery no longer registers the calling worktree as a session. Keep
 // running legacy sources addressable until they stop, then retire only records.
@@ -16,7 +20,7 @@ func (p *Project) currentState(_ string) (*State, error) {
 	if !hasSources {
 		return state, nil
 	}
-	err = p.transaction(func(s *State) error {
+	err = p.withRegistryLock(unix.LOCK_EX|unix.LOCK_NB, func(s *State) error {
 		state = s
 		snap, err := p.checkedSnapshot()
 		if err != nil {
@@ -34,6 +38,6 @@ func (p *Project) currentState(_ string) (*State, error) {
 		}
 		s.Tasks = kept
 		return atomicJSON(filepath.Join(p.Dir, "state.json"), s)
-	}, false)
+	})
 	return state, err
 }

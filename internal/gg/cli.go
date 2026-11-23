@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -55,18 +56,26 @@ func (p *Project) sessionViews(s *State, snap Snapshot) []SessionView {
 }
 
 func newCLI() *cobra.Command {
-	project, _ := Discover(".")
-	cfg, _ := project.settings()
+	var project *Project
+	var discoveryErr error
+	args := os.Args[1:]
+	// A dashboard starts with global settings. Service commands resolve their
+	// target via --workspace or --root, independently of the caller's cwd.
+	dashboardLaunch := len(args) == 1 && args[0] == "dashboard" && os.Getenv("GG_TEST_LEGACY_DASHBOARD") != "1"
+	serviceCall := len(args) > 0 && strings.HasPrefix(args[0], "_") && !slices.Contains(args, "--help") && !slices.Contains(args, "-h")
+	if !dashboardLaunch && !serviceCall {
+		project, discoveryErr = DiscoverWorkspace(".")
+	}
+	cfg, cfgErr := project.settings()
 	tr := cfg.text
 	discover := func() (*Project, error) {
-		p, err := DiscoverWorkspace(".")
-		if err == nil {
-			_, err = p.settings()
+		if discoveryErr != nil {
+			return nil, discoveryErr
 		}
-		if err == nil {
-			err = p.register()
+		if cfgErr != nil {
+			return nil, cfgErr
 		}
-		return p, err
+		return project, project.register()
 	}
 	root := &cobra.Command{
 		Use: "gg", Short: tr("Parallel Git sessions and persistent terminals", "Параллельные Git-сессии и постоянные терминалы"),

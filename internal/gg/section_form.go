@@ -227,7 +227,7 @@ func (m continuousDashboard) updateSectionForm(msg tea.Msg) (tea.Model, tea.Cmd)
 		m.side.cursorGroup, m.side.cursorID, m.side.cursorFolder = section.ID, 0, true
 		m.side.message = ""
 		m.listFocus, m.side.active = true, true
-		return m, m.side.refresh()
+		return m, requestSidebarRefresh
 	}
 	return m, nil
 }

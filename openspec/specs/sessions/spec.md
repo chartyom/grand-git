@@ -17,6 +17,17 @@ In Git, every create task SHALL have a separate worktree and an active backgroun
 - **WHEN** the requested branch is used by another worktree
 - **THEN** creation fails without switching that worktree
 
+### Requirement: Worktree checkout hooks
+Creation SHALL wait for Git to finish adding the worktree and return after the terminal and registry are ready. Checkout hooks SHALL be able to list committed sessions. A process left running by a completed hook SHALL NOT delay the create result by keeping the hook's output descriptors open.
+
+#### Scenario: Checkout hook lists sessions and starts a background process
+- **WHEN** a checkout hook runs `gg list --json`, starts a background process that inherits its output, and returns success
+- **THEN** the list reports committed sessions and `gg create` returns with the new session active while the background process continues running
+
+#### Scenario: Checkout hook fails
+- **WHEN** a checkout hook reports an error after Git has created the worktree and new branch
+- **THEN** creation reports the hook diagnostic and rolls back both the worktree and new branch
+
 ### Requirement: Stable project registry
 Git tasks SHALL use <git-common-dir>/grand-git for their registry and service data and SHALL have unique branches and stable internal IDs. New records SHALL use increasing positive IDs; legacy IDs, including source 0, SHALL persist while registered. Ordinary/temporary names SHALL not reserve branches. Discovery SHALL NOT register source worktrees. Concurrent creates SHALL allocate unique IDs. Failure before startup commands SHALL roll back new records and created Git objects.
 

@@ -24,6 +24,25 @@ func compactFixture(t *testing.T, count int) sidebar {
 	return m
 }
 
+func TestSidebarCoalescesRefreshRequests(t *testing.T) {
+	m := compactFixture(t, 1)
+	next, first := m.Update(requestSidebarRefresh())
+	m = next.(sidebar)
+	if first == nil || !m.refreshing {
+		t.Fatal("initial refresh did not start")
+	}
+	next, duplicate := m.Update(requestSidebarRefresh())
+	m = next.(sidebar)
+	if duplicate != nil || !m.refreshing {
+		t.Fatal("concurrent request started a second refresh")
+	}
+	next, _ = m.Update(refreshMsg{hidden: true})
+	m = next.(sidebar)
+	if _, resumed := m.Update(requestSidebarRefresh()); resumed == nil {
+		t.Fatal("refresh did not resume after hidden pane check")
+	}
+}
+
 func TestSearchThresholdUsesCandidatesAndResetsOnShrink(t *testing.T) {
 	for _, count := range []int{0, 10, 11} {
 		m := compactFixture(t, count)

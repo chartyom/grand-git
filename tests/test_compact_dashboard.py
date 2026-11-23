@@ -11,6 +11,16 @@ class CompactDashboardTests(SessionFixture):
     def launcher(self):
         return next(t for t in self.public_tasks() if t["kind"] == "temporary")
 
+    def test_detached_sidebars_start_git_polling_when_client_attaches(self):
+        self.create("first")
+        self.create("second")
+        cache = self.root / ".git/grand-git/git-status.json"
+        time.sleep(1.0)
+        self.assertFalse(cache.exists())
+        self.attach_session(cwd=self.tasks()[0]["path"])
+        wait_for(cache.exists)
+        wait_for(lambda: "second" in self.capture(self.sidebar(1)))
+
     def test_ctrl_w_opens_and_closes_compact_list(self):
         proc, master = self.attach()
         task_id = int(self.launcher()["id"].split(":")[1])

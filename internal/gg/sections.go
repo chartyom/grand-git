@@ -24,6 +24,7 @@ func (c *workspaceCatalog) validateSections(workspaces map[int]bool) error {
 		if c.NextSectionID != 0 || len(c.Sections) != 0 {
 			return errors.New("invalid section catalog version or counter; file preserved")
 		}
+		c.needsSectionMigration = true
 		c.SectionsVersion, c.NextSectionID, c.Sections = 1, 1, []sectionRecord{}
 		for _, w := range c.Workspaces {
 			c.ensureSection(w.ID, w.Root)
@@ -231,42 +232,44 @@ func (p *Project) withCreationSection(cwd string, create func(*Project) (*Task, 
 	return task, err
 }
 
-func collectSections() ([]sessionGroup, error) {
-	// Old clients can still write records without a section. Their records use
-	// the root section, including after an empty root was previously removed.
-	err := catalogTransaction(func(c *workspaceCatalog) error {
-		for _, w := range c.Workspaces {
-			p, err := w.project()
-			if err != nil {
-				continue
-			}
-			s, err := p.load()
-			if err != nil {
-				continue
-			}
-			for _, t := range s.Tasks {
-				if t.SectionID == 0 {
-					c.ensureSection(w.ID, w.Root)
-					break
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
+func collectSections(git bool) ([]sessionGroup, error) {
 	c, err := readCatalog()
 	if err != nil {
 		return nil, err
 	}
-	groups, err := collectGroups(true)
-	if err != nil {
-		return nil, err
-	}
-	byWorkspace := map[int]sessionGroup{}
+	groups := collectWorkspaceGroups(c.Workspaces, git)
+	byWorkspace := make(map[int]sessionGroup, len(groups))
+	rootSections := make(map[int]bool)
 	for _, g := range groups {
 		byWorkspace[g.View.ID] = g
+	}
+	for _, section := range c.Sections {
+		if section.Path == byWorkspace[section.Workspace].View.Path {
+			rootSections[section.Workspace] = true
+		}
+	}
+	var missingRoots []*Project
+	for _, g := range groups {
+		if !rootSections[g.View.ID] && hasUnsectionedTasks(g.State) {
+			missingRoots = append(missingRoots, g.Project)
+		}
+	}
+	if c.needsSectionMigration || len(missingRoots) != 0 {
+		// Old clients can write records with no section. Recheck under the
+		// catalog lock so a concurrent removal of an empty root is respected.
+		err = catalogTransaction(func(latest *workspaceCatalog) error {
+			for _, p := range missingRoots {
+				state, err := p.load()
+				if err == nil && hasUnsectionedTasks(state) {
+					latest.ensureSection(p.WorkspaceID, p.Root)
+				}
+			}
+			c = latest
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	out := []sessionGroup{}
 	for _, section := range c.Sections {
@@ -310,6 +313,17 @@ func collectSections() ([]sessionGroup, error) {
 	return out, nil
 }
 
+func hasUnsectionedTasks(state *State) bool {
+	if state != nil {
+		for _, task := range state.Tasks {
+			if task.SectionID == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (g sessionGroup) workspaceID() int {
 	if g.Workspace > 0 {
 		return g.Workspace
@@ -332,7 +346,7 @@ func (m sidebar) openGroup() int {
 
 func (m sidebar) collectGroups(git bool) ([]sessionGroup, error) {
 	if m.direct {
-		return collectSections()
+		return collectSections(git)
 	}
 	return collectGroups(git)
 }

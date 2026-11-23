@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -103,7 +104,7 @@ func TestSectionMigrationRemovalAndDuplicatePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		groups, err := collectSections()
+		groups, err := collectSections(false)
 		if err != nil || len(groups) != 0 {
 			t.Fatalf("removed section returned: %+v %v", groups, err)
 		}
@@ -115,6 +116,65 @@ func TestSectionMigrationRemovalAndDuplicatePaths(t *testing.T) {
 	s, err = addSection(root)
 	if err != nil || s.ID <= id {
 		t.Fatalf("section ID reused: %+v %v", s, err)
+	}
+}
+
+func TestSectionListReadsWhileAnotherCreationHoldsCatalogLock(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := canonicalTempDir(t)
+	section, err := addSection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	err = catalogTransaction(func(*workspaceCatalog) error {
+		go func() {
+			groups, err := collectSections(false)
+			if err == nil && (len(groups) != 1 || groups[0].Section != section.ID || groups[0].Err != nil) {
+				err = errors.New("saved section unavailable during creation")
+			}
+			result <- err
+		}()
+		select {
+		case err := <-result:
+			return err
+		case <-time.After(3 * time.Second):
+			return errors.New("section list waited for the catalog writer")
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSectionListRestoresRootForLegacyWriter(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := canonicalTempDir(t)
+	section, err := addSection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, p, err := sectionByID(section.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeSection(section.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.locked(func(s *State) error {
+		s.Tasks = append(s.Tasks, &Task{ID: s.NextID, Kind: "terminal", Path: root, Name: "legacy"})
+		s.NextID++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	groups, err := collectSections(false)
+	if err != nil || len(groups) != 1 || groups[0].Section <= section.ID || len(groups[0].State.Tasks) != 1 {
+		t.Fatalf("legacy session in restored root section: %+v, %v", groups, err)
+	}
+	c, err := readCatalog()
+	if err != nil || len(c.Sections) != 1 || c.Sections[0].ID != groups[0].Section {
+		t.Fatalf("restored root did not persist: %+v, %v", c, err)
 	}
 }
 

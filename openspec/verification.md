@@ -1,5 +1,12 @@
 # Current verification
 
+## Session creation and dashboard startup (2026-11-23)
+
+- On Linux with Git and tmux, a checkout hook that left a four-second background process holding its output delayed `gg create feat` from `f74e6ce` for 4.26 seconds. The fixed build returned in 0.26 seconds with the process alive. A checkout hook listing committed sessions completed during creation, including with an active legacy source. A failed hook retained its stderr diagnostic and rolled back the new worktree and branch.
+- With two Linux CPU cores, three interleaved runs per build and eleven active worktrees, median first creation time fell from 0.314 to 0.170 seconds and eleventh creation from 0.301 to 0.178 seconds. Across a two-second detached interval, Git invocations fell from 251 to zero and tmux invocations from 299–300 to 65. Opening the populated list and its folder form took a median of 0.216 seconds before and 0.166 seconds after.
+- With six registered Git projects and a controlled 15 ms per subprocess invocation, the full list appeared in 0.33 seconds versus 0.79 seconds before. The folder form accepted input in 0.51 seconds versus 1.62 seconds. A separate test held the catalog write lock during a section read. The saved list remained available, and legacy records with no section still restored their root sections.
+- Twelve native Linux tmux/PTY scenarios covered creation, rollback, Ctrl+W navigation, temporary terminal exit, concurrent clients and legacy upgrades. Upgrading a server from the previous build preserved the user's terminal PID. The delegated usage-skill review checked the CLI help, hook visibility and return behavior, and deferred Git status refresh. All eight OpenSpec specifications passed validation.
+
 ## v1.0.1 release preparation (2026-11-23)
 
 - The delegated usage-skill review checked the Git requirements for v1.0.1 and v1.0.0 against the worktree discovery implementation, updated the stable download link and pinned installer example, and confirmed the CLI and installer help. The legacy Git worktree regression test and all six installer fixture tests passed.

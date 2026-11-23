@@ -153,7 +153,7 @@ func (m continuousDashboard) open(a popupAction) (tea.Model, tea.Cmd) {
 	m.side.message = ""
 	m.listFocus = false
 	m.side.active = false
-	return m, m.side.refresh()
+	return m, requestSidebarRefresh
 }
 
 func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
@@ -172,7 +172,7 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.side.message = ""
-		return m, m.side.refresh()
+		return m, requestSidebarRefresh
 	case "terminal":
 		section, target, err := sectionByID(a.Section)
 		if err != nil {
@@ -268,7 +268,7 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 		if err := target.operationInBackground(a.Kind, ids, false, a.Bulk, a.Bulk); err != nil {
 			m.side.message = err.Error()
 		}
-		return m, m.side.refresh()
+		return m, requestSidebarRefresh
 	}
 	return m, nil
 }
@@ -345,7 +345,7 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.form = &updated
 		if updated.cancelled {
 			m.form = nil
-			return m, m.side.refresh()
+			return m, requestSidebarRefresh
 		}
 		if updated.done {
 			name := strings.TrimSpace(updated.inputs[0].Value())

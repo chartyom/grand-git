@@ -698,13 +698,44 @@ class SessionsTest(SessionFixture):
 
     def test_failed_checkout_hook_rolls_back_worktree_and_new_branch(self):
         hook = self.root / ".git/hooks/post-checkout"
-        hook.write_text("#!/bin/sh\nexit 1\n")
+        hook.write_text("#!/bin/sh\necho checkout-hook-failed >&2\nexit 1\n")
         hook.chmod(0o755)
         result = self.create("failed-hook", check=False)
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("checkout-hook-failed", result.stderr)
         self.assertEqual(self.tasks(), [])
         self.assertFalse((Path(str(self.root) + "__sessions") / "failed-hook").exists())
         self.assertNotEqual(self.git("show-ref", "--verify", "refs/heads/failed-hook", check=False).returncode, 0)
+
+    def test_create_returns_while_checkout_hook_background_process_runs(self):
+        pid_path = Path(self.tmp.name) / "hook-child.pid"
+        hook = self.root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\nsleep 120 &\necho $! > \"$GG_TEST_HOOK_CHILD_PID\"\n")
+        hook.chmod(0o755)
+        try:
+            self.create("feat", env=dict(self.env, GG_TEST_HOOK_CHILD_PID=str(pid_path)))
+            os.kill(int(pid_path.read_text()), 0)
+            self.assertTrue(self.tasks()[0]["active"])
+        finally:
+            if pid_path.exists():
+                try:
+                    os.kill(int(pid_path.read_text()), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+    def test_checkout_hook_reads_committed_sessions_during_create(self):
+        output = Path(self.tmp.name) / "hook-list.json"
+        hook = self.root / ".git/hooks/post-checkout"
+        hook.write_text("#!/bin/sh\n" + shlex.quote(str(BIN)) + " list --json > " + shlex.quote(str(output)) + "\n")
+        hook.chmod(0o755)
+        self.create("feat")
+        self.assertEqual(json.loads(output.read_text()), [])
+        self.seed_legacy_source()
+        self.create("second")
+        previous = json.loads(output.read_text())
+        self.assertCountEqual([(r["kind"], r["branch"], r["active"]) for r in previous],
+                              [("source", "main", True), ("worktree", "feat", True)])
+        self.assertCountEqual([r["branch"] for r in self.tasks()], ["feat", "second"])
 
     def test_dashboard_modal_keys_resize_and_background_survival(self):
         self.create("first")

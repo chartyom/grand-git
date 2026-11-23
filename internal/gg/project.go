@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,14 +52,43 @@ type State struct {
 	NoticeUntil  time.Time `json:"notice_until,omitempty"`
 }
 
-func command(dir, name string, args ...string) (string, error) {
+func commandIn(dir, name string, args ...string) *exec.Cmd {
 	c := exec.Command(name, args...)
 	c.Dir = dir
-	b, err := c.CombinedOutput()
+	return c
+}
+
+func command(dir, name string, args ...string) (string, error) {
+	b, err := commandIn(dir, name, args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%s: %s: %w", name, strings.TrimSpace(string(b)), err)
 	}
 	return strings.TrimRight(string(b), "\r\n"), nil
+}
+
+func addWorktree(dir string, args ...string) error {
+	// A checkout hook can leave a background process holding Git's output
+	// descriptors. A regular file lets Run wait for Git itself and still
+	// preserves diagnostics from both Git and the hook on failure.
+	output, err := os.CreateTemp("", "gg-worktree-*")
+	if err != nil {
+		return err
+	}
+	defer output.Close()
+	if err := os.Remove(output.Name()); err != nil {
+		return err
+	}
+	cmd := commandIn(dir, "git", args...)
+	cmd.Stdout, cmd.Stderr = output, output
+	if err := cmd.Run(); err != nil {
+		info, statErr := output.Stat()
+		if statErr != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+		b, _ := io.ReadAll(io.NewSectionReader(output, 0, info.Size()))
+		return fmt.Errorf("git: %s: %w", strings.TrimSpace(string(b)), err)
+	}
+	return nil
 }
 
 func Discover(dir string) (*Project, error) {
@@ -164,6 +194,19 @@ func (p *Project) locked(fn func(*State) error) error {
 }
 
 func (p *Project) transaction(fn func(*State) error, persist bool) error {
+	return p.withRegistryLock(unix.LOCK_EX, func(s *State) error {
+		if err := fn(s); err != nil {
+			return err
+		}
+		if persist {
+			return atomicJSON(filepath.Join(p.Dir, "state.json"), s)
+		}
+		return nil
+	})
+}
+
+// LOCK_NB skips optional maintenance when a writer is provisioning a session.
+func (p *Project) withRegistryLock(flags int, fn func(*State) error) error {
 	if err := os.MkdirAll(p.Dir, 0700); err != nil {
 		return err
 	}
@@ -172,7 +215,10 @@ func (p *Project) transaction(fn func(*State) error, persist bool) error {
 		return err
 	}
 	defer f.Close()
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+	if err := unix.Flock(int(f.Fd()), flags); err != nil {
+		if flags&unix.LOCK_NB != 0 && errors.Is(err, unix.EWOULDBLOCK) {
+			return nil
+		}
 		return err
 	}
 	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
@@ -180,13 +226,7 @@ func (p *Project) transaction(fn func(*State) error, persist bool) error {
 	if err != nil {
 		return err
 	}
-	if err := fn(s); err != nil {
-		return err
-	}
-	if !persist {
-		return nil
-	}
-	return atomicJSON(filepath.Join(p.Dir, "state.json"), s)
+	return fn(s)
 }
 
 func taskByID(s *State, id int) (*Task, error) {
@@ -287,12 +327,12 @@ func (p *Project) createTask(cwd, branch, base string, skipCopy bool, template .
 			if t.LaunchToken != "" {
 				_ = os.Remove(p.launchPath(t.LaunchToken))
 			}
-			command(p.Root, "git", "worktree", "remove", "--force", "--", path)
+			_ = commandIn(p.Root, "git", "worktree", "remove", "--force", "--", path).Run()
 			if !exists {
-				command(p.Root, "git", "branch", "-D", "--", branch)
+				_ = commandIn(p.Root, "git", "branch", "-D", "--", branch).Run()
 			}
 		}
-		if _, err := command(p.Root, "git", args...); err != nil {
+		if err := addWorktree(p.Root, args...); err != nil {
 			// Git may finish registration and checkout before a project hook
 			// fails. Only clean up a worktree of the requested branch at the
 			// previously absent destination, never an unrelated occupied path.

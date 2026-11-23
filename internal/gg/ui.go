@@ -22,6 +22,8 @@ var danger = lipgloss.NewStyle().Foreground(lipgloss.Color("#F7768E"))
 var green = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ECE6A"))
 
 type refreshMsg struct {
+	project *Project
+	hidden  bool
 	groups  []sessionGroup
 	state   *State
 	snap    Snapshot
@@ -30,7 +32,7 @@ type refreshMsg struct {
 	err     error
 	started time.Time
 }
-type tickMsg struct{}
+type tickMsg struct{ periodic bool }
 type actionMsg struct{ err error }
 type popupAction struct {
 	Section   int
@@ -65,6 +67,7 @@ type sidebar struct {
 	cfg                                   Settings
 	git                                   map[string]string
 	active, confirming                    bool
+	refreshing                            bool
 	confirmID                             int
 	confirmAction                         string
 	message                               string
@@ -81,7 +84,6 @@ type sidebar struct {
 	popup                                 bool
 	resultPath                            string
 
-	runToken                         string
 	direct                           bool
 	cursorFolder                     bool
 	hover, menuTarget                *listTarget
@@ -96,12 +98,30 @@ type sidebar struct {
 }
 
 func sidebarTick() tea.Cmd {
-	return tea.Tick(400*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{} })
+	return tea.Tick(400*time.Millisecond, func(time.Time) tea.Msg { return tickMsg{periodic: true} })
 }
-func (m sidebar) refresh() tea.Cmd {
+func requestSidebarRefresh() tea.Msg { return tickMsg{} }
+
+func (m sidebar) collectRefresh() tea.Cmd {
 	return func() tea.Msg {
 		started := time.Now()
-		groups, err := m.collectGroups(true)
+		withGit := m.groups != nil
+		if !m.direct && !m.popup && m.pane != "" {
+			viewers, err := m.p.tmux("display-message", "-p", "-t", m.pane, "#{window_active_clients}")
+			if err == nil && viewers == "0" {
+				// Compact clients still display the server's activity counter
+				// while every sidebar is parked or in a background window.
+				if m.task >= 0 {
+					return refreshMsg{hidden: true}
+				}
+				clients, err := m.p.tmux("list-clients", "-F", "#{client_pid}")
+				if err == nil && clients == "" {
+					return refreshMsg{hidden: true}
+				}
+				withGit = false
+			}
+		}
+		groups, err := m.collectGroups(withGit)
 		cfg, cfgErr := m.p.settings()
 		if err == nil {
 			err = cfgErr
@@ -121,10 +141,10 @@ func (m sidebar) refresh() tea.Cmd {
 			_ = m.p.syncSettings()
 			m.p.updateGroupCounter(groups, cfg)
 		}
-		return refreshMsg{groups: groups, state: state, snap: snap, cfg: cfg, git: git, err: err, started: started}
+		return refreshMsg{project: m.p, groups: groups, state: state, snap: snap, cfg: cfg, git: git, err: err, started: started}
 	}
 }
-func (m sidebar) Init() tea.Cmd      { return tea.Batch(m.refresh(), sidebarTick()) }
+func (m sidebar) Init() tea.Cmd      { return func() tea.Msg { return tickMsg{periodic: true} } }
 func effect(fn func() error) tea.Cmd { return func() tea.Msg { return actionMsg{err: fn()} } }
 
 func resetViewport() tea.Cmd {
@@ -371,9 +391,18 @@ func (m sidebar) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.search.SetWidth(max(4, m.width-5))
 		return m, resetViewport()
 	case tickMsg:
-		return m, tea.Batch(m.refresh(), sidebarTick())
+		var next tea.Cmd
+		if msg.periodic {
+			next = sidebarTick()
+		}
+		if m.refreshing {
+			return m, next
+		}
+		m.refreshing = true
+		return m, tea.Batch(m.collectRefresh(), next)
 	case refreshMsg:
-		if msg.started.Before(m.lastKey) {
+		m.refreshing = false
+		if msg.hidden || (msg.project != nil && msg.project != m.p) || msg.started.Before(m.lastKey) {
 			return m, nil
 		}
 		if msg.err != nil {
@@ -402,7 +431,7 @@ func (m sidebar) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.message = msg.err.Error()
 		}
-		return m, m.refresh()
+		return m, requestSidebarRefresh
 	case tea.MouseWheelMsg:
 		if m.modal == "actions" {
 			step := 1
@@ -687,20 +716,7 @@ func newSidebar(p *Project, task int) sidebar {
 	search := textinput.New()
 	search.SetWidth(24)
 	search.Prompt = "/ "
-	m := sidebar{p: p, task: task, cursorID: max(0, task), cursorGroup: p.WorkspaceID, pane: os.Getenv("TMUX_PANE"), client: os.Getenv("GG_DASHBOARD_CLIENT"), cfg: cfg, width: 32, height: 30, search: search}
-	if p.WorkspaceID > 0 {
-		if s, err := p.load(); err == nil {
-			if t, err := taskByID(s, task); err == nil && t.Kind == "temporary" {
-				m.runToken = t.RunToken
-			}
-		}
-	}
-	if m.client != "" {
-		if run, err := readRun(clientPID(m.client)); err == nil && len(run.Origins) > 0 {
-			m.runToken = run.Origins[len(run.Origins)-1].Token
-		}
-	}
-	return m
+	return sidebar{p: p, task: task, cursorID: max(0, task), cursorGroup: p.WorkspaceID, pane: os.Getenv("TMUX_PANE"), client: os.Getenv("GG_DASHBOARD_CLIENT"), cfg: cfg, width: 32, height: 30, search: search}
 }
 func runSidebar(p *Project, task int) error {
 	m := newSidebar(p, task)

@@ -29,11 +29,12 @@ type workspaceRecord struct {
 	Directory bool   `json:"directory,omitempty"`
 }
 type workspaceCatalog struct {
-	NextID          int               `json:"next_id"`
-	Workspaces      []workspaceRecord `json:"workspaces"`
-	SectionsVersion int               `json:"sections_version"`
-	NextSectionID   int               `json:"next_section_id"`
-	Sections        []sectionRecord   `json:"sections"`
+	needsSectionMigration bool
+	NextID                int               `json:"next_id"`
+	Workspaces            []workspaceRecord `json:"workspaces"`
+	SectionsVersion       int               `json:"sections_version"`
+	NextSectionID         int               `json:"next_section_id"`
+	Sections              []sectionRecord   `json:"sections"`
 }
 type sessionGroup struct {
 	Project   *Project
@@ -91,19 +92,20 @@ func DiscoverWorkspace(dir string) (*Project, error) {
 			break
 		}
 	}
+	if marker {
+		return Discover(root)
+	}
 	if _, err := exec.LookPath("git"); err == nil {
 		c := exec.Command("git", "rev-parse", "--git-common-dir")
 		c.Dir = root
 		c.Env = append(os.Environ(), "LC_ALL=C")
 		out, probeErr := c.CombinedOutput()
-		if probeErr == nil || marker {
+		if probeErr == nil {
 			return Discover(root)
 		}
 		if !strings.Contains(string(out), "not a git repository") {
 			return nil, fmt.Errorf("git: %s", strings.TrimSpace(string(out)))
 		}
-	} else if marker {
-		return nil, checkDependency("git", "2.31")
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -154,20 +156,38 @@ func (r workspaceRecord) key() string {
 	return "git:" + r.Common
 }
 func (p *Project) register() error {
+	c, err := readCatalog()
+	if err != nil {
+		return err
+	}
+	// Workspace IDs are permanent. Readers, including Git checkout hooks,
+	// can reuse a committed ID while creation holds the catalog lock.
+	if id := c.workspaceIDFor(p); id != 0 && !c.needsSectionMigration {
+		p.setWorkspaceID(id)
+		return nil
+	}
 	return catalogTransaction(func(c *workspaceCatalog) error {
 		p.registerIn(c)
 		return nil
 	})
 }
 
-func (p *Project) registerIn(c *workspaceCatalog) {
+func (c *workspaceCatalog) workspaceIDFor(p *Project) int {
 	r := workspaceRecord{Root: p.Root, Common: p.Common, Directory: p.Directory}
 	for _, old := range c.Workspaces {
 		if old.key() == r.key() {
-			p.setWorkspaceID(old.ID)
-			return
+			return old.ID
 		}
 	}
+	return 0
+}
+
+func (p *Project) registerIn(c *workspaceCatalog) {
+	if id := c.workspaceIDFor(p); id != 0 {
+		p.setWorkspaceID(id)
+		return
+	}
+	r := workspaceRecord{Root: p.Root, Common: p.Common, Directory: p.Directory}
 	r.ID = c.NextID
 	c.NextID++
 	c.Workspaces = append(c.Workspaces, r)
@@ -237,18 +257,22 @@ func collectGroups(git bool) ([]sessionGroup, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(c.Workspaces, func(i, j int) bool {
-		a, b := c.Workspaces[i], c.Workspaces[j]
+	return collectWorkspaceGroups(c.Workspaces, git), nil
+}
+
+func collectWorkspaceGroups(workspaces []workspaceRecord, git bool) []sessionGroup {
+	sort.Slice(workspaces, func(i, j int) bool {
+		a, b := workspaces[i], workspaces[j]
 		x, y := strings.ToLower(filepath.Base(a.Root)), strings.ToLower(filepath.Base(b.Root))
 		if x == y {
 			return a.Root < b.Root
 		}
 		return x < y
 	})
-	groups := make([]sessionGroup, len(c.Workspaces))
+	groups := make([]sessionGroup, len(workspaces))
 	var wg sync.WaitGroup
 	limit := make(chan struct{}, 4)
-	for i, r := range c.Workspaces {
+	for i, r := range workspaces {
 		wg.Add(1)
 		go func(i int, r workspaceRecord) {
 			defer wg.Done()
@@ -272,7 +296,7 @@ func collectGroups(git bool) ([]sessionGroup, error) {
 		}(i, r)
 	}
 	wg.Wait()
-	return groups, nil
+	return groups
 }
 func (p *Project) publicID(id int) string { return fmt.Sprintf("%d:%d", p.WorkspaceID, id) }
 func resolveSession(arg string) (*Project, *Task, error) {

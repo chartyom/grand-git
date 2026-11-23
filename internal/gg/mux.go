@@ -14,17 +14,18 @@ import (
 	"golang.org/x/term"
 )
 
-const uiRevision = "grand-git-v10"
+const uiRevision = "grand-git-v11"
 
 type Pane struct {
-	Generation                                          string
+	Generation, WindowName, AppliedLabel                string
+	CurrentUI                                           bool
 	ID, Window, Task, Command, Session                  string
 	Sidebar, Dead, Active, Service                      bool
 	X, Y, Width, Height, WindowWidth, WindowHeight, PID int
 }
 type Snapshot []Pane
 
-func (p *Project) tmux(args ...string) (string, error) {
+func tmuxArgs(args []string) []string {
 	// tmux expands formats in start-directory even when the shell argument is
 	// quoted. Keep Git branch paths containing #{...} or #(...) literal.
 	args = append([]string(nil), args...)
@@ -34,7 +35,52 @@ func (p *Project) tmux(args ...string) (string, error) {
 			i++
 		}
 	}
-	return command(p.Root, "tmux", append([]string{"-L", p.Socket}, args...)...)
+	// A trailing semicolon in argv is a tmux command separator unless escaped.
+	for i, arg := range args {
+		if strings.HasSuffix(arg, ";") {
+			args[i] = strings.TrimSuffix(arg, ";") + `\;`
+		}
+	}
+	return args
+}
+
+func (p *Project) tmux(args ...string) (string, error) {
+	return command(p.Root, "tmux", append([]string{"-L", p.Socket}, tmuxArgs(args)...)...)
+}
+
+type tmuxCommands [][]string
+
+func (c *tmuxCommands) add(args ...string) { *c = append(*c, args) }
+
+// tmux stops a command sequence on the first error. Keep each invocation
+// within its 16 KiB message limit even when bindings contain long paths.
+func (p *Project) runTmuxCommands(commands tmuxCommands) error {
+	var batch []string
+	size := 0
+	run := func() error {
+		_, err := command(p.Root, "tmux", append([]string{"-L", p.Socket}, batch...)...)
+		return err
+	}
+	for _, cmd := range commands {
+		args := tmuxArgs(cmd)
+		n := 2 // semicolon and its terminating NUL
+		for _, arg := range args {
+			n += len(arg) + 1
+		}
+		if len(batch) > 0 && size+n > 12*1024 {
+			if err := run(); err != nil {
+				return err
+			}
+			batch = nil
+			size = 0
+		}
+		if len(batch) > 0 {
+			batch = append(batch, ";")
+		}
+		batch = append(batch, args...)
+		size += n
+	}
+	return run()
 }
 
 func (p *Project) snapshot() Snapshot {
@@ -44,7 +90,21 @@ func (p *Project) snapshot() Snapshot {
 
 // Migration must not interpret a failed query as an empty server.
 func (p *Project) checkedSnapshot() (Snapshot, error) {
-	out, err := p.tmux("list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{@gg_task}\t#{@gg_sidebar}\t#{pane_dead}\t#{pane_active}\t#{pane_current_command}\t#{session_name}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{window_height}\t#{@gg_service}\t#{pane_pid}\t#{@gg_temporary}")
+	return p.readSnapshot(false)
+}
+
+func (p *Project) readSnapshot(forUpgrade bool) (Snapshot, error) {
+	format := "#{pane_id}\t#{window_id}\t#{@gg_task}\t#{@gg_sidebar}\t#{pane_dead}\t#{pane_active}\t#{pane_current_command}\t#{session_name}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_height}\t#{window_width}\t#{window_height}\t#{@gg_service}\t#{pane_pid}\t#{@gg_temporary}"
+	fields := 17
+	if forUpgrade {
+		// Task labels are single-line. Reject control delimiters in externally
+		// modified names so they cannot split a snapshot row.
+		format += "\t#{==:#{@gg_ui_revision}," + uiRevision + "}" +
+			"\t#{?#{m/r:[\t\r\n],#{window_name}},,#{window_name}}" +
+			"\t#{?#{m/r:[\t\r\n],#{@gg_applied_label}},,#{@gg_applied_label}}"
+		fields += 3
+	}
+	out, err := p.tmux("list-panes", "-a", "-F", format)
 	if err != nil {
 		message := err.Error()
 		if strings.Contains(message, "no server running on ") ||
@@ -58,7 +118,7 @@ func (p *Project) checkedSnapshot() (Snapshot, error) {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(out, "\n") {
 		v := strings.Split(line, "\t")
-		if len(v) != 17 {
+		if len(v) != fields {
 			return nil, errors.New("invalid tmux pane snapshot")
 		}
 		if seen[v[0]] {
@@ -66,7 +126,11 @@ func (p *Project) checkedSnapshot() (Snapshot, error) {
 		}
 		seen[v[0]] = true
 		n := func(i int) int { x, _ := strconv.Atoi(v[i]); return x }
-		panes = append(panes, Pane{ID: v[0], Window: v[1], Task: v[2], Sidebar: v[3] == "1", Dead: v[4] == "1", Active: v[5] == "1", Command: v[6], Session: v[7], X: n(8), Y: n(9), Width: n(10), Height: n(11), WindowWidth: n(12), WindowHeight: n(13), Service: v[14] == "1", PID: n(15), Generation: v[16]})
+		pane := Pane{ID: v[0], Window: v[1], Task: v[2], Sidebar: v[3] == "1", Dead: v[4] == "1", Active: v[5] == "1", Command: v[6], Session: v[7], X: n(8), Y: n(9), Width: n(10), Height: n(11), WindowWidth: n(12), WindowHeight: n(13), Service: v[14] == "1", PID: n(15), Generation: v[16]}
+		if forUpgrade {
+			pane.CurrentUI, pane.WindowName, pane.AppliedLabel = v[17] == "1", v[18], v[19]
+		}
+		panes = append(panes, pane)
 	}
 	return panes, nil
 }
@@ -127,14 +191,11 @@ func (p *Project) ensureServer() error {
 		}
 		return p.syncSettings()
 	}
-	if _, err := p.tmux("-f", "/dev/null", "new-session", "-d", "-s", "dashboard", "-n", "Grand Git", "-x", "120", "-y", "32", "-c", p.Root, p.invocation("_sidebar", "--root", p.Root, "--task", "-1")); err != nil {
-		return err
-	}
-	pane, err := p.tmux("display-message", "-p", "-t", "dashboard:0", "#{pane_id}")
+	pane, err := p.tmux("-f", "/dev/null", "new-session", "-d", "-P", "-F", "#{pane_id}", "-s", "dashboard", "-n", "Grand Git", "-x", "120", "-y", "32", "-c", p.Root, p.invocation("_sidebar", "--root", p.Root, "--task", "-1"))
 	if err != nil {
 		return err
 	}
-	for _, args := range [][]string{
+	err = p.runTmuxCommands(tmuxCommands{
 		{"set-option", "-g", "prefix", "None"}, {"set-option", "-g", "prefix2", "None"},
 		{"set-option", "-g", "status", "on"}, {"set-option", "-g", "status-interval", "1"},
 		{"set-option", "-g", "window-status-format", ""}, {"set-option", "-g", "window-status-current-format", ""},
@@ -146,11 +207,10 @@ func (p *Project) ensureServer() error {
 		{"set-window-option", "-g", "window-size", "latest"},
 		{"set-option", "-p", "-t", pane, "@gg_sidebar", "1"}, {"set-option", "-p", "-t", pane, "@gg_task", "-1"},
 		{"set-option", "-p", "-t", pane, "@gg_ui_revision", uiRevision},
-	} {
-		if _, err = p.tmux(args...); err != nil {
-			p.tmux("kill-session", "-t", "=dashboard")
-			return err
-		}
+	})
+	if err != nil {
+		p.tmux("kill-session", "-t", "=dashboard")
+		return err
 	}
 	return p.syncSettings()
 }
@@ -184,11 +244,14 @@ func (p *Project) upgradePanels() error {
 	if err != nil {
 		return err
 	}
+	panes, err := p.readSnapshot(true)
+	if err != nil {
+		return err
+	}
 	checkedWindows := map[string]bool{}
-	for _, pane := range p.snapshot() {
+	for _, pane := range panes {
 		if pane.Sidebar {
-			revision, _ := p.tmux("show-options", "-p", "-v", "-t", pane.ID, "@gg_ui_revision")
-			if revision != uiRevision {
+			if !pane.CurrentUI {
 				if pane.ID == os.Getenv("TMUX_PANE") {
 					continue
 				}
@@ -203,18 +266,14 @@ func (p *Project) upgradePanels() error {
 			if t, e := taskByID(state, mustInt(pane.Task)); e == nil {
 				label := oneLine(t.label())
 				if !checkedWindows[pane.Window] {
-					name, e := p.tmux("display-message", "-p", "-t", pane.Window, "#{window_name}")
-					if e != nil {
-						return e
-					}
-					if name != label {
+					if pane.WindowName != label {
 						if _, err = p.tmux("rename-window", "-t", pane.Window, label); err != nil {
 							return err
 						}
 					}
 					checkedWindows[pane.Window] = true
 				}
-				applied, _ := p.tmux("show-options", "-p", "-v", "-t", pane.ID, "@gg_applied_label")
+				applied := pane.AppliedLabel
 				if applied != label {
 					if applied == "" {
 						title, e := p.tmux("display-message", "-p", "-t", pane.ID, "#{pane_title}")
@@ -249,11 +308,10 @@ func (p *Project) upgradePanels() error {
 	return nil
 }
 func (p *Project) labelPane(pane, label string) error {
-	if _, err := p.tmux("select-pane", "-t", pane, "-T", label); err != nil {
-		return err
-	}
-	_, err := p.tmux("set-option", "-p", "-t", pane, "@gg_applied_label", label)
-	return err
+	return p.runTmuxCommands(tmuxCommands{
+		{"select-pane", "-t", pane, "-T", label},
+		{"set-option", "-p", "-t", pane, "@gg_applied_label", label},
+	})
 }
 func mustInt(s string) int { n, _ := strconv.Atoi(s); return n }
 
@@ -286,54 +344,41 @@ func (p *Project) syncSettings() error {
 	if previous == string(data) {
 		return nil
 	}
-	for _, key := range []string{"C-Left", "C-Down", "C-Up", "C-Right", "M-Left", "M-Down", "M-Up", "M-Right", "M-h", "M-j", "M-k", "M-l"} {
-		if _, err = p.tmux("unbind-key", "-q", "-n", key); err != nil {
-			return err
-		}
+	// On tmux 3.4, unbind-key -q on an absent table silently ends its
+	// command sequence. Keep legacy-table cleanup separate from new bindings.
+	var obsolete tmuxCommands
+	for _, key := range []string{"Left", "Down", "Up", "Right", "Escape", "Any"} {
+		obsolete.add("unbind-key", "-q", "-T", "gg-navigate", key)
 	}
-	if _, err = p.tmux("unbind-key", "-q", "-n", "C-p"); err != nil {
+	if err := p.runTmuxCommands(obsolete); err != nil {
 		return err
 	}
+	var commands tmuxCommands
+	for _, key := range []string{"C-Left", "C-Down", "C-Up", "C-Right", "M-Left", "M-Down", "M-Up", "M-Right", "M-h", "M-j", "M-k", "M-l"} {
+		commands.add("unbind-key", "-q", "-n", key)
+	}
+	commands.add("unbind-key", "-q", "-n", "C-p")
 	for _, key := range []string{"q", "Q", "n", "N", "t", "T", "s", "S", "y", "Y", "b", "B", "r", "R", "Enter"} {
 		script := p.invocation("_input", "--root", p.Root, "--key", key) + " --pane '#{pane_id}' --reader '#{pane_pid}' --client '#{client_pid}:#{client_created}'"
-		if _, err = p.tmux("bind-key", "-n", key, "if-shell", "-F", "#{==:#{@gg_sidebar},1}", "run-shell "+quote(script), "send-keys "+key); err != nil {
-			return err
-		}
+		commands.add("bind-key", "-n", key, "if-shell", "-F", "#{==:#{@gg_sidebar},1}", "run-shell "+quote(script), "send-keys "+key)
 	}
 	mouse := "set-option -p -F @gg_mouse_clients " + quote("#{@gg_mouse_clients}#{client_pid}:#{client_created},") + " ; send-keys -M"
-	if _, err = p.tmux("bind-key", "-n", "MouseDown1Pane", "select-pane -t = ; if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote(mouse)+" "+quote("send-keys -M")); err != nil {
-		return err
-	}
-	if _, err = p.tmux("bind-key", "-n", "MouseDown3Pane", "if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote("select-pane -t = ; "+mouse)+" "+quote("send-keys -M")); err != nil {
-		return err
-	}
+	commands.add("bind-key", "-n", "MouseDown1Pane", "select-pane -t = ; if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote(mouse)+" "+quote("send-keys -M"))
+	commands.add("bind-key", "-n", "MouseDown3Pane", "if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote("select-pane -t = ; "+mouse)+" "+quote("send-keys -M"))
 	mouseRelease := "set-option -p -F @gg_last_mouse_client " + quote("#{client_pid}:#{client_created}") + " ; send-keys -M"
-	if _, err = p.tmux("bind-key", "-n", "MouseUp1Pane", "select-pane -t = ; if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote(mouseRelease)+" "+quote("send-keys -M")); err != nil {
-		return err
-	}
+	commands.add("bind-key", "-n", "MouseUp1Pane", "select-pane -t = ; if-shell -F "+quote("#{==:#{@gg_sidebar},1}")+" "+quote(mouseRelease)+" "+quote("send-keys -M"))
 	for _, binding := range []struct{ key, selection string }{
 		{"DoubleClick1Pane", "select-word"},
 		{"TripleClick1Pane", "select-line"},
 	} {
 		ordinary := "if-shell -F " + quote("#{||:#{pane_in_mode},#{mouse_any_flag}}") + " " + quote("send-keys -M") + " " + quote("copy-mode -H ; send-keys -X "+binding.selection+" ; run-shell -d 0.3 ; send-keys -X copy-pipe-and-cancel")
 		command := "select-pane -t = ; if-shell -F " + quote("#{==:#{@gg_sidebar},1}") + " " + quote(mouse) + " " + quote(ordinary)
-		if _, err = p.tmux("bind-key", "-n", binding.key, command); err != nil {
-			return err
-		}
+		commands.add("bind-key", "-n", binding.key, command)
 	}
-	if _, err = p.tmux("unbind-key", "-q", "-n", "C-g"); err != nil {
-		return err
-	}
-	for _, key := range []string{"Left", "Down", "Up", "Right", "Escape", "Any"} {
-		if _, err = p.tmux("unbind-key", "-q", "-T", "gg-navigate", key); err != nil {
-			return err
-		}
-	}
+	commands.add("unbind-key", "-q", "-n", "C-g")
 	script := p.invocation("_navigate", "--root", p.Root) + " --pane '#{pane_id}' --client '#{client_pid}:#{client_created}'"
-	if _, err = p.tmux("bind-key", "-n", "C-w", "run-shell", script); err != nil {
-		return err
-	}
-	for _, args := range [][]string{
+	commands.add("bind-key", "-n", "C-w", "run-shell", script)
+	commands = append(commands, tmuxCommands{
 		{"set-option", "-g", "mouse", "on"},
 		{"set-option", "-s", "escape-time", "10"},
 		{"set-option", "-g", "status-left", " Grand Git · " + strings.ReplaceAll(p.Root[strings.LastIndex(p.Root, "/")+1:], "#", "##") + " │ "},
@@ -343,12 +388,8 @@ func (p *Project) syncSettings() error {
 		{"set-hook", "-g", "pane-died", "run-shell -b " + quote(p.invocation("_temporary-ended", "--root", p.Root)+" --task '#{@gg_task}' --token '#{@gg_temporary}'")},
 		{"set-hook", "-g", "client-resized", "run-shell " + quote(p.invocation("_resize", "--root", p.Root))},
 		{"set-option", "-g", "@gg_settings", string(data)},
-	} {
-		if _, err = p.tmux(args...); err != nil {
-			return err
-		}
-	}
-	return nil
+	}...)
+	return p.runTmuxCommands(commands)
 }
 
 func sidebarWidth(width int) int     { return min(56, max(28, int(math.Round(float64(width)*.25)))) }
@@ -449,13 +490,12 @@ func (p *Project) addSidebar(target string, id int) error {
 	if err != nil {
 		return err
 	}
-	for _, kv := range [][2]string{{"@gg_sidebar", "1"}, {"@gg_task", strconv.Itoa(id)}, {"@gg_ui_revision", uiRevision}} {
-		if _, err = p.tmux("set-option", "-p", "-t", pane, kv[0], kv[1]); err != nil {
-			return err
-		}
-	}
-	_, err = p.tmux("select-pane", "-t", pane, "-T", p.text("Sessions", "Сессии"))
-	return err
+	return p.runTmuxCommands(tmuxCommands{
+		{"set-option", "-p", "-t", pane, "@gg_sidebar", "1"},
+		{"set-option", "-p", "-t", pane, "@gg_task", strconv.Itoa(id)},
+		{"set-option", "-p", "-t", pane, "@gg_ui_revision", uiRevision},
+		{"select-pane", "-t", pane, "-T", p.text("Sessions", "Сессии")},
+	})
 }
 
 func (p *Project) ensureTask(t *Task, temporary ...bool) (err error) {
@@ -502,11 +542,10 @@ func (p *Project) ensureTask(t *Task, temporary ...bool) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err = p.tmux("set-window-option", "-t", window, "@gg_task", strconv.Itoa(t.ID)); err != nil {
-		p.tmux("kill-window", "-t", window)
-		return err
-	}
-	if _, err = p.tmux("set-window-option", "-t", window, "@gg_temporary", generation); err != nil {
+	if err = p.runTmuxCommands(tmuxCommands{
+		{"set-window-option", "-t", window, "@gg_task", strconv.Itoa(t.ID)},
+		{"set-window-option", "-t", window, "@gg_temporary", generation},
+	}); err != nil {
 		p.tmux("kill-window", "-t", window)
 		return err
 	}
