@@ -13,7 +13,7 @@ import (
 
 func TestFailedCreationAndCorruptSectionMetadataPreserveCatalog(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	p := &Project{Root: root, Directory: true}
 	want := errors.New("fixture provisioning failure")
 	_, err := p.withCreationSection(root, func(*Project) (*Task, error) { return nil, want })
@@ -40,7 +40,7 @@ func TestFailedCreationAndCorruptSectionMetadataPreserveCatalog(t *testing.T) {
 
 func TestFolderBrowserPathsHiddenDirectoriesAndCancellation(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	for _, name := range []string{".hidden", "with spaces"} {
 		if err := os.Mkdir(filepath.Join(root, name), 0700); err != nil {
 			t.Fatal(err)
@@ -75,7 +75,7 @@ func TestFolderBrowserPathsHiddenDirectoriesAndCancellation(t *testing.T) {
 
 func TestSectionMigrationRemovalAndDuplicatePaths(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	if err := os.MkdirAll(userStateDir(), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestSectionMigrationRemovalAndDuplicatePaths(t *testing.T) {
 
 func TestConcurrentSectionsAndStoppedRecordProtection(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	root := t.TempDir()
+	root := canonicalTempDir(t)
 	var wg sync.WaitGroup
 	errs := make(chan error, 8)
 	for range 8 {

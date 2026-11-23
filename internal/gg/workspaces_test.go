@@ -11,9 +11,18 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestConcurrentCatalogRegistrationAndSymlinkIdentity(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	roots := []string{t.TempDir(), t.TempDir(), t.TempDir()}
+	roots := []string{canonicalTempDir(t), canonicalTempDir(t), canonicalTempDir(t)}
 	var wg sync.WaitGroup
 	errs := make(chan error, 12)
 	for i := 0; i < 12; i++ {

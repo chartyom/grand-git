@@ -27,6 +27,7 @@ class GlobalDashboardTests(SessionFixture):
 
     def focus_launcher(self, master, row):
         pid = next(proc.pid for proc, fd, _, _ in self.clients if fd == master)
+        wait_for(lambda: str(pid) in self.mux_for(row, "list-clients", "-F", "#{client_pid}").stdout.splitlines())
         os.write(master, b"\x17")
         def sidebar_focused():
             clients = self.mux_for(row, "list-clients", "-F", "#{client_pid} #{pane_id}").stdout.splitlines()

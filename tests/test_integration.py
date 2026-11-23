@@ -214,17 +214,24 @@ class SessionFixture(unittest.TestCase):
             task_id, group_id = int(row["id"].split(":")[1]), row["workspace"]["id"]
         client_path = Path(self.env["XDG_STATE_HOME"]) / "grand-git/clients"
         client_path.mkdir(parents=True, exist_ok=True)
-        gate = client_path / f"connect-ready-{secrets.token_hex(8)}"
+        # _connect records the native PID start time in its lease before reading
+        # the client context. A FIFO keeps both steps ordered on Linux and macOS.
         proc, master = self.start_client([
-            "/bin/sh", "-c", 'while [ ! -f "$1" ]; do sleep 0.01; done; shift; exec "$@"',
-            "sh", str(gate), str(BIN), "_connect", "--workspace", str(group_id), "--task", str(task_id)
+            "/bin/sh", "-c", 'mkfifo "$1/$$.json" && shift && exec "$@"',
+            "sh", str(client_path), str(BIN), "_connect", "--workspace", str(group_id), "--task", str(task_id)
         ], cwd=cwd)
-        stat = Path(f"/proc/{proc.pid}/stat").read_text()
-        start = stat[stat.rfind(")") + 1:].split()[19]
-        (client_path / f"{proc.pid}.json").write_text(json.dumps({
-            "pid": proc.pid, "start": start, "token": secrets.token_hex(16), "origins": []
-        }))
-        gate.touch()
+        lease = self.root / ".git/grand-git/attaches" / f"{proc.pid}.json"
+        wait_for(lease.exists)
+        context = client_path / f"{proc.pid}.json"
+        record = json.dumps({
+            "pid": proc.pid, "start": json.loads(lease.read_text())["Start"],
+            "token": secrets.token_hex(16), "origins": []
+        })
+        with context.open("w") as first_read:
+            saved = context.with_suffix(".tmp")
+            saved.write_text(record)
+            saved.replace(context)
+            first_read.write(record)
         wait_for(lambda: str(proc.pid) in self.tmux("list-clients", "-F", "#{client_pid}", check=False).stdout.splitlines())
         return proc, master
 
@@ -419,18 +426,25 @@ class SessionsTest(SessionFixture):
         wait_for(lambda: "fix/beta" in self.capture(self.sidebar(0)) and "feat/alpha" not in self.capture(self.sidebar(0)))
         os.write(master, b"\r")
         wait_for(lambda: self.active() == "2|")
-        os.write(master, b"\x17t")
+        os.write(master, b"\x17")
+        wait_for(lambda: self.active() == "2|1" and
+                 any(line.split() == ["Open:", "yes"] for line in self.capture(self.sidebar(2)).splitlines()))
+        os.write(master, b"t")
         wait_for(lambda: "Add terminal" in self.capture(self.sidebar(2)))
         os.write(master, b"\x1b")
         self.assertEqual(self.tasks()[1]["terminals"], 1)
         # Fresh per-window list has no query. A single click opens alpha.
         side = next(p for p in self.geometry(2) if p[2] == "1")
-        line = next(i for i, text in enumerate(self.capture(side[0]).splitlines()) if "feat/alpha" in text)
-        y = int(side[5]) + line + 1
+        row = wait_for(lambda: next((i for i, text in enumerate(self.capture(side[0]).splitlines(), 1)
+                                    if "feat/alpha" in text), None))
+        y = int(side[5]) + row
         click = f"\x1b[<0;4;{y}M\x1b[<0;4;{y}m".encode()
         os.write(master, click)
         wait_for(lambda: self.active() == "1|")
-        os.write(master, b"\x17s")
+        os.write(master, b"\x17")
+        wait_for(lambda: self.active() == "1|1" and
+                 any(line.split() == ["Open:", "yes"] for line in self.capture(self.sidebar(1)).splitlines()))
+        os.write(master, b"s")
         wait_for(lambda: "Stop feat/alpha?" in self.capture(self.sidebar(1)))
         os.write(master, b"y")
         wait_for(lambda: not self.tasks()[0]["active"])
@@ -470,10 +484,12 @@ class SessionsTest(SessionFixture):
         for source, target, key in ((1, 2, b"j"), (2, 1, b"k")):
             os.write(master, b"\x17")
             wait_for(lambda: self.active() == f"{source}|1")
+            side = self.sidebar(source)
+            wait_for(lambda: any(line.split() == ["Open:", "yes"] for line in self.capture(side).splitlines()))
             os.write(master, key)
             name = "second" if target == 2 else "first"
-            wait_for(lambda: any(line.endswith("/" + name) for line in self.capture(self.sidebar(source)).splitlines())
-                     and any(line.split() == ["Open:", "no"] for line in self.capture(self.sidebar(source)).splitlines()))
+            wait_for(lambda: any(line.endswith("/" + name) for line in self.capture(side).splitlines())
+                     and any(line.split() == ["Open:", "no"] for line in self.capture(side).splitlines()))
             time.sleep(.2)
             offset = len(self.outputs[proc.pid])
             os.write(master, b"\r")
@@ -495,9 +511,12 @@ class SessionsTest(SessionFixture):
         os.write(master, b"\x17")
         wait_for(lambda: self.active() == f"{temporary_id}|1")
         side = self.sidebar(temporary_id)
+        wait_for(lambda: any(line.split() == ["Open:", "yes"] for line in self.capture(side).splitlines()))
         pid = self.tmux("display-message", "-p", "-t", side, "#{pane_pid}").stdout.strip()
         self.tmux("set-option", "-p", "-t", side, "@gg_ui_revision", "stale")
-        os.write(master, b"k\r")
+        os.write(master, b"k")
+        wait_for(lambda: any(line.endswith("/second") for line in self.capture(side).splitlines()))
+        os.write(master, b"\r")
         wait_for(lambda: self.active() == "2|")
         self.assertIsNone(proc.poll())
         self.assertEqual(pid, self.tmux("display-message", "-p", "-t", side, "#{pane_pid}").stdout.strip())

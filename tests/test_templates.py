@@ -21,6 +21,14 @@ class TemplateTests(SessionFixture):
         self.tmux("send-keys", "-t", pane, "-l", command)
         self.tmux("send-keys", "-t", pane, "Enter")
 
+    def prepare_zsh(self, rc=""):
+        # tmux captures the environment when the project's server starts.
+        directory = Path(self.tmp.name) / "zsh"
+        directory.mkdir()
+        (directory / ".zshenv").write_text("unsetopt GLOBAL_RCS\n")
+        (directory / ".zshrc").write_text(rc)
+        self.env["ZDOTDIR"] = str(directory)
+
     def test_builtin_presets_launch_existing_executables_without_installing(self):
         shim = Path(self.tmp.name) / "programs"
         shim.mkdir()
@@ -183,6 +191,7 @@ class TemplateTests(SessionFixture):
         self.assertTrue(self.tasks()[0]["active"])
 
     def test_ctrl_c_returns_to_shell_for_sh_bash_and_zsh(self):
+        self.prepare_zsh()
         for name in ["sh", "bash", "zsh"]:
             executable = shutil.which(name)
             if not executable:
@@ -195,10 +204,6 @@ class TemplateTests(SessionFixture):
                     wrapper.write_text("#!/bin/sh\nexec " + shlex.quote(executable) + ' --noprofile --norc "$@"\n')
                     wrapper.chmod(0o700)
                     executable = str(wrapper)
-                if name == "zsh":
-                    rc = Path(self.tmp.name) / "empty-zsh"
-                    rc.mkdir()
-                    env["ZDOTDIR"] = str(rc)
                 env["SHELL"] = executable
                 self.template_file("interrupt", ["sleep 30", "touch must-not-run"])
                 self.gg("create", "interrupt-" + name, "--template", "interrupt", env=env)
@@ -216,10 +221,8 @@ class TemplateTests(SessionFixture):
         executable = shutil.which("zsh")
         if not executable:
             self.skipTest("zsh unavailable")
-        rc = Path(self.tmp.name) / "zshrc"
-        rc.mkdir()
-        (rc / ".zshrc").write_text("gg_fixture_function() { printf from-rc > rc-ready; }\n")
-        self.env.update(SHELL=executable, ZDOTDIR=str(rc), HISTFILE="/dev/null")
+        self.prepare_zsh("gg_fixture_function() { printf from-rc > rc-ready; }\n")
+        self.env.update(SHELL=executable, HISTFILE="/dev/null")
         self.template_file("rc", ["gg_fixture_function"])
         self.gg("create", "feat/rc", "--template", "rc")
         path = Path(self.tasks()[0]["path"]) / "rc-ready"

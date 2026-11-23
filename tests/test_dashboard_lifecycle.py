@@ -65,7 +65,11 @@ class DashboardLifecycleTests(SessionFixture):
 
     def test_last_temporary_shell_exit_removes_record_without_closing_dashboard(self):
         proc, master = self.attach()
-        self.tmux("send-keys", "-t", self.terminal(self.launcher_id()), "exit", "Enter")
+        launcher = self.launcher_id()
+        terminal = self.terminal(launcher)
+        wait_for(lambda: any(line.split() == ["Open:", "yes"]
+                             for line in self.capture(self.sidebar(launcher)).splitlines()))
+        self.tmux("send-keys", "-t", terminal, "exit", "Enter")
         wait_for(lambda: not any(r["kind"] == "temporary" for r in self.public_tasks()))
         self.assertIsNone(proc.poll())
         self.assertTrue(self.root.exists())
@@ -205,6 +209,7 @@ class DashboardLifecycleTests(SessionFixture):
     def test_q_preserves_terminal_during_prepared_attach(self):
         first, master = self.attach()
         wait_for(lambda: self.origin()["temporary"])
+        first_id = self.origin()["id"]
         gate = Path(self.tmp.name) / "allow-attach"
         prepared = Path(self.tmp.name) / "attach-prepared"
         wrappers = Path(self.tmp.name) / "wrapper"
@@ -223,8 +228,10 @@ class DashboardLifecycleTests(SessionFixture):
         self.focus_list(master)
         os.write(master, b"q")
         wait_for(lambda: first.poll() is not None)
-        self.assertEqual(len([r for r in self.public_tasks() if r["kind"] == "temporary"]), 1)
-        self.assertTrue(self.origin()["active"])
+        def remaining_origin():
+            rows = [r for r in self.public_tasks() if r["kind"] == "temporary"]
+            return rows[0] if len(rows) == 1 and rows[0]["id"] != first_id else None
+        self.assertTrue(wait_for(remaining_origin)["active"])
         gate.touch()
         wait_for(lambda: str(second.pid) in self.tmux("list-clients", "-F", "#{client_pid}").stdout.splitlines())
         self.focus_list(other)

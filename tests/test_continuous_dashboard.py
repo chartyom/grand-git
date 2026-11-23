@@ -1,12 +1,25 @@
 """A dashboard invocation keeps its Go process while changing projects."""
 
 import os
+import sys
 from pathlib import Path
 import json
 import shlex
 import time
 
 from test_integration import BIN, SessionFixture, wait_for
+
+
+def executable_path(pid):
+    if sys.platform == "darwin":
+        import ctypes
+
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        path = ctypes.create_string_buffer(4096)  # PROC_PIDPATHINFO_MAXSIZE
+        if libproc.proc_pidpath(pid, path, len(path)) <= 0:
+            raise OSError(ctypes.get_errno(), "proc_pidpath")
+        return Path(os.fsdecode(path.value)).resolve()
+    return Path(f"/proc/{pid}/exe").resolve()
 
 
 class ContinuousDashboardTests(SessionFixture):
@@ -62,7 +75,7 @@ class ContinuousDashboardTests(SessionFixture):
 
         proc, master = self.launch_terminal()
         wait_for(lambda: bool(self.local_terminal()))
-        self.assertEqual(Path(f"/proc/{proc.pid}/exe").resolve(), BIN.resolve())
+        self.assertEqual(executable_path(proc.pid), BIN.resolve())
 
         switched_at = len(self.outputs[proc.pid])
         os.write(master, b"\x17kk\r")
@@ -76,7 +89,7 @@ class ContinuousDashboardTests(SessionFixture):
         os.write(master, b"\x17jj\r")
         time.sleep(.3)
         self.assertIsNone(proc.poll())
-        self.assertEqual(Path(f"/proc/{proc.pid}/exe").resolve(), BIN.resolve())
+        self.assertEqual(executable_path(proc.pid), BIN.resolve())
         self.assertEqual(foreign_pid, self.run_cmd("tmux", "-L", self.socket_for(foreign), "list-panes", "-a", "-F", "#{pane_pid}").stdout.splitlines())
 
         os.write(master, b"\x17q")
