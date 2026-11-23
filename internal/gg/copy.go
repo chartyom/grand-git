@@ -22,23 +22,43 @@ func (p *Project) copySource(cwd, base string) (string, error) {
 	if base != "" {
 		ref, _ := command(cwd, "git", "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", base)
 		if strings.HasPrefix(ref, "refs/heads/") {
-			out, err := command(p.Root, "git", "worktree", "list", "--porcelain", "-z")
+			path, err := p.worktreeForBranch(ref)
 			if err != nil {
 				return "", err
 			}
-			path := ""
-			for _, field := range strings.Split(out, "\x00") {
-				if strings.HasPrefix(field, "worktree ") {
-					path = strings.TrimPrefix(field, "worktree ")
-				}
-				if field == "branch "+ref {
-					source = path
-					break
-				}
+			if path != "" {
+				source = path
 			}
 		}
 	}
 	return filepath.EvalSymlinks(source)
+}
+
+func (p *Project) worktreeForBranch(ref string) (string, error) {
+	if p.legacyWorktreeList {
+		out, err := command(p.Root, "git", "for-each-ref", "--count=1", "--format=%(refname)%00%(worktreepath)%00", "--", ref)
+		if err != nil {
+			return "", err
+		}
+		name, rest, _ := strings.Cut(out, "\x00")
+		if path, _, ok := strings.Cut(rest, "\x00"); ok && name == ref {
+			return path, nil
+		}
+		return "", nil
+	}
+	out, err := command(p.Root, "git", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return "", err
+	}
+	path := ""
+	for field := range strings.SplitSeq(out, "\x00") {
+		if value, ok := strings.CutPrefix(field, "worktree "); ok {
+			path = value
+		} else if field == "branch "+ref {
+			return path, nil
+		}
+	}
+	return "", nil
 }
 
 type ignoredCopier struct {

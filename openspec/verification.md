@@ -48,3 +48,22 @@ Requirements: installation / Repository-local workflow demo; cli / Background cr
 - Media decoding: PASS. The GIF contains 94 frames at 1060×583, loops over 28.47 seconds and occupies 208,502 bytes. Its first frame previews the completed dashboard; the PNG matches the decoded final frame. The creation form, second worktree and restored terminal frames were visually inspected.
 - Both README image links, static PNG links, alternative text and release archive asset paths: PASS. The files use repository-relative paths and exist at the referenced locations.
 - `sh scripts/check-specs.sh`: PASS, 8 current specifications. `git diff --check`: PASS.
+
+## Shell alias troubleshooting verification
+
+Requirement: installation / Shell alias troubleshooting.
+
+- Bash 5.2 and Zsh 5.9 with an isolated PATH and Git without GUI helpers: `gg='git gui citool'` reproduced `git: 'gui' is not a git command` even with Grand Git on PATH. `type -a gg` showed the alias and binary, and showed only the alias when the binary was removed from PATH. `command gg --version`, the direct executable path and plain `gg --version` after `unalias gg` all returned the Grand Git version.
+- Both README links resolve to the [installation troubleshooting section](../docs/installation.md#if-gg-runs-git-gui).
+- `go build -o bin/gg ./cmd/gg`, `python3 -m unittest discover -s tests -p test_installation.py -v` (6 tests), and `sh scripts/check-specs.sh` (8 specifications): PASS.
+
+## Git worktree compatibility verification
+
+Requirements: installation / Portable runtime targets, Git 2.31 through 2.35; sessions / Ignored environment discovery and source, Protected origin worktrees.
+
+- Native Git 2.31.0 and 2.34.1 on Linux: the preceding build failed at `git worktree list --porcelain -z`. With the fix, `test_create_without_worktree_list_z`, `test_copy_source_follows_base_worktree_or_calling_worktree` and `test_existing_external_worktree_is_registered_without_ownership` passed on both versions. The regression test checks creation from the main and linked worktrees, copy sources for checked-out and unchecked branches, and a worktree path containing spaces, quotes, a Unicode character and a newline.
+- Native Git 2.31.0 with isolated tmux: `test_nested_sections_keep_cwd_and_bulk_deletion_inside_section` and `test_create_popup_is_shown_to_the_initiating_client` passed.
+- An independent `skill-maintainer` review confirmed that the usage skill already documents Git 2.31+ and the base and calling-worktree copy rules. Fresh `gg create --help` and three focused native Git 2.31.0 integration checks passed. No skill edits were needed.
+- `go build -o bin/gg ./cmd/gg` and `sh scripts/check-specs.sh` (8 specifications): PASS.
+- `sh scripts/test.sh` on Linux with Git 2.43.0: Go tests, `go vet` and 109 integration tests passed, including the regression test with a Git shim that rejects `worktree list --porcelain -z`.
+- macOS amd64 and arm64 cross-builds produced Mach-O executables. `git diff --check`: PASS.

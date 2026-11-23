@@ -872,6 +872,45 @@ class SessionsTest(SessionFixture):
         self.assertEqual(child["copy_source"], task["path"])
         self.assertEqual((Path(child["path"]) / ".env").read_text(), "release environment")
 
+    def test_create_without_worktree_list_z(self):
+        if self.git("worktree", "list", "--porcelain", "-z", check=False).returncode == 0:
+            git = shutil.which("git", path=self.env["PATH"])
+            tools = Path(self.tmp.name) / "tools"
+            tools.mkdir()
+            shim = tools / "git"
+            shim.write_text(f"""#!/bin/sh
+case "$*" in
+    --version) echo 'git version 2.31.0'; exit 0 ;;
+    'worktree list --porcelain -z') echo 'error: unknown switch z' >&2; exit 129 ;;
+esac
+exec {shlex.quote(git)} "$@"
+""")
+            shim.chmod(0o755)
+            self.env["PATH"] = str(tools) + os.pathsep + self.env["PATH"]
+
+        (self.root / ".gitignore").write_text(".env\n")
+        self.git("add", ".gitignore")
+        self.commit("ignore env")
+        self.git("branch", "-f", "release/demo", "main")
+        self.git("branch", "unchecked", "main")
+        release = Path(self.tmp.name) / 'release "é"\nworktree'
+        self.git("worktree", "add", str(release), "release/demo")
+        (self.root / ".env").write_text("main environment")
+        (release / ".env").write_text("release environment")
+
+        scenarios = [
+            ("from-release", "release/demo", self.root, release, "release environment"),
+            ("from-main", "main", release, self.root, "main environment"),
+            ("from-unchecked", "unchecked", release, release, "release environment"),
+        ]
+        for name, base, cwd, source, contents in scenarios:
+            with self.subTest(base=base):
+                self.gg("create", name, "--base", base, cwd=cwd)
+                task = next(t for t in self.tasks(cwd) if t["branch"] == name)
+                self.assertEqual(task["copy_source"], str(source))
+                self.assertEqual((Path(task["path"]) / ".env").read_text(), contents)
+                self.assertTrue(task["active"])
+
     def test_copy_preserves_destination_files_and_does_not_follow_target_links(self):
         (self.root / ".gitignore").write_text(".env\nlocal/\nnode_modules/\n")
         self.git("add", ".gitignore")

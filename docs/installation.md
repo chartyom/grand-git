@@ -74,6 +74,14 @@ go install github.com/chartyom/grand-git/cmd/gg@latest
 
 This requires Go 1.26+ and the runtime dependencies. The binary is installed in `GOBIN`, or `$(go env GOPATH)/bin` when `GOBIN` is unset, and reports `dev` without release linker metadata.
 
+## If gg runs git gui
+
+If `gg` opens Git GUI or reports `git: 'gui' is not a git command`, run `type -a gg` in Bash or Zsh. An alias such as `gg='git gui citool'` takes precedence over the Grand Git executable on PATH.
+
+With Grand Git on PATH, `command gg --version` bypasses the alias. You can also use the executable's path directly, for example `./bin/gg --version` from the source checkout. If `type -a gg` shows only the alias, add the directory containing the executable to PATH.
+
+Run `unalias gg` to remove the alias in the current shell. For future shells, remove or rename the alias in your shell configuration, or put `unalias gg` after the line that loads it.
+
 ## Maintainer release procedure
 
 1. Use `https://github.com/chartyom/grand-git` as the source and release repository. The module path, installer default and GoReleaser target use this identity.

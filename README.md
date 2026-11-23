@@ -26,6 +26,8 @@ gg --version
 
 The repository is [chartyom/grand-git](https://github.com/chartyom/grand-git). The [installation guide](docs/installation.md) covers dependencies, permanent installation, archives, the release installer, updates and removal. Go and Node.js are not needed to run a built binary.
 
+If `gg` opens Git GUI or reports a missing `gui` command, check for a [shell alias named `gg`](docs/installation.md#if-gg-runs-git-gui).
+
 ## Quick start
 
 ```sh

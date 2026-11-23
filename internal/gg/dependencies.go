@@ -39,17 +39,23 @@ func dependencyInstallHint() string {
 }
 
 func checkDependency(name, minimum string) error {
+	_, err := checkedDependencyVersion(name, minimum)
+	return err
+}
+
+func checkedDependencyVersion(name, minimum string) (string, error) {
 	path, err := exec.LookPath(name)
 	if err != nil {
-		return fmt.Errorf("%s not found; requires %s+. Install: %s", name, minimum, dependencyInstallHint())
+		return "", fmt.Errorf("%s not found; requires %s+. Install: %s", name, minimum, dependencyInstallHint())
 	}
 	flag := "--version"
 	if name == "tmux" {
 		flag = "-V"
 	}
 	out, err := exec.Command(path, flag).CombinedOutput()
-	if err != nil || !versionAtLeast(string(out), minimum) {
-		return fmt.Errorf("%s %s+ required (found %q). Install or upgrade: %s", name, minimum, strings.TrimSpace(string(out)), dependencyInstallHint())
+	version := strings.TrimSpace(string(out))
+	if err != nil || !versionAtLeast(version, minimum) {
+		return "", fmt.Errorf("%s %s+ required (found %q). Install or upgrade: %s", name, minimum, version, dependencyInstallHint())
 	}
-	return nil
+	return version, nil
 }

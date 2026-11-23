@@ -20,6 +20,7 @@ type Project struct {
 	WorkspaceID                    int
 	SectionID                      int
 	Directory                      bool
+	legacyWorktreeList             bool
 }
 
 type Task struct {
@@ -61,7 +62,8 @@ func command(dir, name string, args ...string) (string, error) {
 }
 
 func Discover(dir string) (*Project, error) {
-	if err := checkDependency("git", "2.31"); err != nil {
+	version, err := checkedDependencyVersion("git", "2.31")
+	if err != nil {
 		return nil, err
 	}
 	common, err := command(dir, "git", "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -75,12 +77,8 @@ func Discover(dir string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := command(dir, "git", "worktree", "list", "--porcelain", "-z")
-	if err != nil {
-		return nil, err
-	}
-	root := strings.TrimPrefix(strings.Split(out, "\x00")[0], "worktree ")
-	root, err = filepath.EvalSymlinks(root)
+	legacy := !versionAtLeast(version, "2.36")
+	root, err := mainWorktree(dir, common, legacy)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +91,24 @@ func Discover(dir string) (*Project, error) {
 		return nil, err
 	}
 	h := sha256.Sum256([]byte(common))
-	return &Project{Root: root, Common: common, Dir: filepath.Join(common, "grand-git"), Socket: fmt.Sprintf("gg-%x", h[:8]), Exe: exe}, nil
+	return &Project{Root: root, Common: common, Dir: filepath.Join(common, "grand-git"), Socket: fmt.Sprintf("gg-%x", h[:8]), Exe: exe, legacyWorktreeList: legacy}, nil
+}
+
+func mainWorktree(dir, common string, legacy bool) (string, error) {
+	if legacy {
+		// Git before 2.36 lists the canonical common directory with a trailing
+		// /.git removed. Its line-delimited output can contain unescaped newlines.
+		if filepath.Base(common) == ".git" {
+			return filepath.Dir(common), nil
+		}
+		return common, nil
+	}
+	out, err := command(dir, "git", "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return "", err
+	}
+	first, _, _ := strings.Cut(out, "\x00")
+	return filepath.EvalSymlinks(strings.TrimPrefix(first, "worktree "))
 }
 
 func (p *Project) load() (*State, error) {

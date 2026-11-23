@@ -26,6 +26,8 @@ gg --version
 
 Репозиторий — [chartyom/grand-git](https://github.com/chartyom/grand-git). [Руководство по установке](docs/installation.md) описывает зависимости, постоянную установку, архивы, установщик, обновление и удаление. Готовому бинарнику Go и Node.js не нужны.
 
+Если `gg` открывает Git GUI или сообщает, что команда `gui` отсутствует, проверьте, есть ли в вашей оболочке [алиас `gg`](docs/installation.md#if-gg-runs-git-gui).
+
 ## Быстрый старт
 
 ```sh
