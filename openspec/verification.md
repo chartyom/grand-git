@@ -1,5 +1,10 @@
 # Current verification
 
+## v1.0.1 release (2026-11-23)
+
+- Tag `v1.0.1` points to `283088c`. All 114 integration tests, Go race tests and vet passed on Linux amd64/arm64, macOS 15 Intel and macOS 26 Apple Silicon. Eight OpenSpec specifications passed. The tagged verification repeated the Linux amd64 job after a timeout in the legacy temporary-session cleanup test.
+- GoReleaser v2.10.2 built the six release assets from a clean checkout of the annotated tag. The four downloaded archives passed SHA-256 verification and contained the tagged documentation. The public installer performed a fresh Linux amd64 install and upgraded v1.0.0 to v1.0.1. The installed executable reported `283088c` and passed five worktree, hook and split-pane integration checks.
+
 ## Session creation and dashboard startup (2026-11-23)
 
 - On Linux with Git and tmux, a checkout hook that left a four-second background process holding its output delayed `gg create feat` from `f74e6ce` for 4.26 seconds. The fixed build returned in 0.26 seconds with the process alive. A checkout hook listing committed sessions completed during creation, including with an active legacy source. A failed hook retained its stderr diagnostic and rolled back the new worktree and branch.

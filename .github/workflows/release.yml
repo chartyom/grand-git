@@ -24,7 +24,8 @@ jobs:
         with:
           distribution: goreleaser
           version: v2.10.2
-          args: check
+          install-only: true
+      - run: goreleaser check
       - name: Build and stage release
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then

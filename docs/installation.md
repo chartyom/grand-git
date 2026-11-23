@@ -7,7 +7,7 @@
 Grand Git runs on Linux and macOS on amd64 or arm64. On Windows, run the Linux build inside WSL2. Use an interactive terminal for the dashboard.
 
 - Terminal sessions require **tmux 3.4+** on PATH.
-- For a source build containing the worktree fix (`fcf9d51`), install **Git 2.31+**. The **v1.0.0 release requires Git 2.36+** even though its installer accepts Git 2.31 through 2.35. With those older Git versions, v1.0.0 fails during worktree discovery because `git worktree list` rejects `-z`.
+- Grand Git v1.0.1 supports **Git 2.31+**. The **v1.0.0 release requires Git 2.36+** even though its installer accepts Git 2.31 through 2.35. With those older Git versions, v1.0.0 fails during worktree discovery because `git worktree list` rejects `-z`.
 - Ordinary directory sessions can run without Git if you install the binary manually. The installer checks for both Git and tmux.
 - Release binaries run without Go, Node.js or Python. Install any programs you select in a startup template separately.
 
@@ -15,14 +15,14 @@ Install the dependencies with `sudo apt install git tmux` on Ubuntu/WSL, `sudo d
 
 ## Release downloads
 
-The following filenames are from v1.0.0. That release includes an installer, a SHA-256 checksum list and these four binary archives. [Grand Git v1.0.0 downloads](https://github.com/chartyom/grand-git/releases/tag/v1.0.0)
+The following filenames are from v1.0.1. That release includes an installer, a SHA-256 checksum list and these four binary archives. [Grand Git v1.0.1 downloads](https://github.com/chartyom/grand-git/releases/tag/v1.0.1)
 
 | Operating system | CPU | Archive |
 | --- | --- | --- |
-| Linux / WSL2 | Intel or AMD x86-64 | `grand-git_1.0.0_linux_amd64.tar.gz` |
-| Linux / WSL2 | ARM64 / aarch64 | `grand-git_1.0.0_linux_arm64.tar.gz` |
-| macOS | Intel | `grand-git_1.0.0_darwin_amd64.tar.gz` |
-| macOS | Apple Silicon | `grand-git_1.0.0_darwin_arm64.tar.gz` |
+| Linux / WSL2 | Intel or AMD x86-64 | `grand-git_1.0.1_linux_amd64.tar.gz` |
+| Linux / WSL2 | ARM64 / aarch64 | `grand-git_1.0.1_linux_arm64.tar.gz` |
+| macOS | Intel | `grand-git_1.0.1_darwin_amd64.tar.gz` |
+| macOS | Apple Silicon | `grand-git_1.0.1_darwin_arm64.tar.gz` |
 
 ### Installer
 
@@ -35,11 +35,11 @@ sh install-gg.sh
 "$HOME/.local/bin/gg" --version
 ```
 
-For a pinned installation, download the installer from the same tag and pass the tag to the script. For another version, replace `v1.0.0` in both commands. Prereleases require an explicit tag. [All releases](https://github.com/chartyom/grand-git/releases)
+For a pinned installation, download the installer from the same tag and pass the tag to the script. For another version, replace `v1.0.1` in both commands. Prereleases require an explicit tag. [All releases](https://github.com/chartyom/grand-git/releases)
 
 ```sh
-curl -fsSL https://github.com/chartyom/grand-git/releases/download/v1.0.0/install.sh -o install-gg.sh
-sh install-gg.sh --version v1.0.0
+curl -fsSL https://github.com/chartyom/grand-git/releases/download/v1.0.1/install.sh -o install-gg.sh
+sh install-gg.sh --version v1.0.1
 ```
 
 The installer needs a POSIX shell, curl, tar/gzip, standard Unix file tools and either `sha256sum` or `shasum`. It selects the archive for the host, verifies it against `checksums.txt` and installs `gg` atomically. An existing `gg` file requires `--force`. A directory named `gg` at the destination is rejected. Failed downloads, invalid archives and checksum mismatches preserve the existing executable.
@@ -55,8 +55,8 @@ In an empty download directory, use the following example for Linux amd64. Set `
 ```sh
 (
   set -eu
-  tag=v1.0.0
-  archive=grand-git_1.0.0_linux_amd64.tar.gz
+  tag=v1.0.1
+  archive=grand-git_1.0.1_linux_amd64.tar.gz
   base="https://github.com/chartyom/grand-git/releases/download/$tag"
   curl -fsSLO "$base/$archive"
   curl -fsSLO "$base/checksums.txt"
@@ -75,7 +75,7 @@ After successful verification, copy `gg` to a directory on PATH. For example, `m
 
 ### Update and uninstall
 
-Download the latest stable installer as above and run `sh install-gg.sh --force` to update. Supply the same `--bin-dir` if you installed in a custom location. Use `--version v1.0.0 --force` to reinstall that version. Reopen the dashboard to use the new executable. Running user terminals survive the update.
+Download the latest stable installer as above and run `sh install-gg.sh --force` to update. Supply the same `--bin-dir` if you installed in a custom location. Use `--version v1.0.1 --force` to reinstall that version. Reopen the dashboard to use the new executable. Running user terminals survive the update.
 
 To uninstall the default binary, run `rm "$HOME/.local/bin/gg"`. Sessions, worktrees, configuration and running terminals remain in place. To stop running terminals first, run `gg stop --all` in each project or ordinary directory group you want to stop.
 
@@ -84,7 +84,7 @@ To uninstall the default binary, run `rm "$HOME/.local/bin/gg"`. Sessions, workt
 To build the released source with **Go 1.26+**, clone its tag and build the CLI.
 
 ```sh
-git clone --branch v1.0.0 https://github.com/chartyom/grand-git.git
+git clone --branch v1.0.1 https://github.com/chartyom/grand-git.git
 cd grand-git
 go build -o bin/gg ./cmd/gg
 ./bin/gg --version
@@ -96,7 +96,7 @@ Local builds report `dev` by default. For a permanent source installation, copy 
 ## Install with Go
 
 ```sh
-go install github.com/chartyom/grand-git/cmd/gg@v1.0.0
+go install github.com/chartyom/grand-git/cmd/gg@v1.0.1
 ```
 
 Use `@latest` to select the latest module release. This method requires Go 1.26+ and builds from the tagged module source. The binary is installed in `GOBIN`, or the first GOPATH entry's `bin` directory when `GOBIN` is unset. It reports `dev` because the release linker flags are applied when packaging the binary archives. Run `go version -m /path/to/gg` with the installed executable's path to see the module version.
