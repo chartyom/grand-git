@@ -35,12 +35,13 @@ def wait_for(predicate, timeout=8):
 
 class SessionFixture(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="gg-test-")
+        # Keep tmux's Unix socket paths within the macOS sockaddr_un limit.
+        self.tmp = tempfile.TemporaryDirectory(prefix="gg-test-", dir="/tmp")
         self.tmp.name = str(Path(self.tmp.name).resolve())
         self.root = Path(self.tmp.name) / "repo with spaces"
         self.root.mkdir()
         self.env = dict(os.environ, TERM="xterm-256color", SHELL="/bin/sh",
-                        GG_TEST_LEGACY_DASHBOARD="1",
+                        GG_TEST_LEGACY_DASHBOARD="1", TMUX_TMPDIR=self.tmp.name,
                         GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null",
                         XDG_CONFIG_HOME=str(Path(self.tmp.name) / "config"),
                         XDG_STATE_HOME=str(Path(self.tmp.name) / "state"))
@@ -55,19 +56,25 @@ class SessionFixture(unittest.TestCase):
         self.clients = []
         self.outputs = {}
 
+    def quiesce_fixture_servers(self, shutdown=False):
+        pids = set()
+        socket_dir = Path(self.tmp.name) / f"tmux-{os.getuid()}"
+        for socket in socket_dir.glob("*"):
+            if not socket.is_socket():
+                continue
+            args = ["tmux", "-N", "-S", str(socket), "list-panes", "-a", "-F", "#{pid} #{pane_pid}",
+                    ";", "set-hook", "-gu", "client-detached", ";", "set-hook", "-gu", "pane-died"]
+            if shutdown:
+                args.extend([";", "kill-server"])
+            result = self.run_cmd(*args, check=False, cwd=self.tmp.name)
+            disconnected = ("no server running", "error connecting", "server exited unexpectedly")
+            if result.returncode and not any(msg in result.stderr for msg in disconnected):
+                self.fail(f"Could not stop fixture server {socket.name}: {result.stderr}")
+            pids.update(result.stdout.split())
+        return pids
+
     def tearDown(self):
-        catalog = Path(self.env["XDG_STATE_HOME"]) / "grand-git/workspaces.json"
-        if catalog.exists():
-            try:
-                for group in json.loads(catalog.read_text())["workspaces"]:
-                    prefix = "gg-dir-" if group.get("directory") else "gg-"
-                    key = group["root"] if group.get("directory") else group["common"]
-                    socket = prefix + hashlib.sha256(key.encode()).hexdigest()[:16]
-                    self.run_cmd("tmux", "-L", socket, "kill-server", check=False, cwd=self.tmp.name)
-            except (ValueError, KeyError):
-                pass
-        self.tmux("kill-server", check=False)
-        self.run_cmd("tmux", "-L", self.socket + "-outer", "kill-server", check=False)
+        pids = self.quiesce_fixture_servers()
         for proc, master, stop, reader in self.clients:
             if proc.poll() is None:
                 proc.terminate()
@@ -79,6 +86,14 @@ class SessionFixture(unittest.TestCase):
             stop.set()
             reader.join(timeout=1)
             os.close(master)
+        pids.update(self.quiesce_fixture_servers(shutdown=True))
+        if pids:
+            def stopped():
+                states = subprocess.run(["ps", "-o", "stat=", "-p", ",".join(pids)],
+                                        text=True, capture_output=True, check=False)
+                self.assertIn(states.returncode, (0, 1), states.stderr)
+                return all(state.startswith("Z") for state in states.stdout.split())
+            wait_for(stopped)
         shutil.rmtree(str(self.root) + "__sessions", ignore_errors=True)
         self.tmp.cleanup()
 

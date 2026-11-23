@@ -165,7 +165,10 @@ class DashboardLifecycleTests(SessionFixture):
 
     def test_mouse_q_targets_its_client(self):
         first, master = self.attach()
+        first_origin = self.origin()["id"]
         second, other = self.attach()
+        second_origin = next(r["id"] for r in self.public_tasks()
+                             if r["kind"] == "temporary" and r["id"] != first_origin)
         wait_for(lambda: str(second.pid) in self.tmux("list-clients", "-F", "#{client_pid}").stdout.splitlines())
         self.focus_list(master)
         side = self.sidebar(self.launcher_id())
@@ -177,8 +180,10 @@ class DashboardLifecycleTests(SessionFixture):
         os.write(master, f"\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m".encode())
         wait_for(lambda: first.poll() is not None)
         self.assertIsNone(second.poll())
-        self.assertTrue(self.origin()["active"])
-        os.write(other, b"\x17q")
+        wait_for(lambda: all(r["id"] != first_origin for r in self.public_tasks()))
+        self.assertTrue(next(r["active"] for r in self.public_tasks() if r["id"] == second_origin))
+        self.focus_list(other)
+        os.write(other, b"q")
         wait_for(lambda: second.poll() is not None)
         wait_for(lambda: not any(r["kind"] == "temporary" for r in self.public_tasks()))
 
