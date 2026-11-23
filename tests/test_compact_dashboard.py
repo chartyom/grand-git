@@ -100,8 +100,9 @@ class CompactDashboardTests(SessionFixture):
         wait_for(lambda: "[S]" in self.capture(side))  # slash did not enter text editing
         self.assertNotIn("[/]", self.capture(side))
         os.write(master, b"\x1b")
+        wait_for(lambda: "[?] Actions" in self.capture(side))
         self.create("last")
-        wait_for(lambda: "[/]" in self.capture(side))
+        wait_for(lambda: self.capture(side).startswith("[/] Search\n"))
         os.write(master, b"/missing\r")
         wait_for(lambda: "No matching sessions" in self.capture(side))
         os.write(master, b"\x1b")
@@ -124,11 +125,14 @@ class CompactDashboardTests(SessionFixture):
         wait_for(lambda: "▸ " in self.capture(side))
         os.write(master, b"\x17")
         wait_for(lambda: self.active() == f"{task_id}|1")
-        wait_for(lambda: re.search(r"Open: +yes", self.capture(side)))
-        self.assertIn("[?] Actions", self.capture(side))
-        self.assertNotIn("GRAND GIT", self.capture(side))
-        self.assertRegex(self.capture(side), r"Terminals: +1")
-        self.assertRegex(self.capture(side), r"Open: +yes")
+        def open_session_details():
+            screen = self.capture(side).expandtabs()
+            return screen if re.search(r"^Open: +yes$", screen, re.MULTILINE) else None
+
+        details = wait_for(open_session_details)
+        self.assertIn("[?] Actions", details)
+        self.assertNotIn("GRAND GIT", details)
+        self.assertRegex(details, r"(?m)^Terminals: +1$")
         screen = self.tmux("capture-pane", "-p", "-e", "-t", side).stdout
         for attributes in re.findall(r"\x1b\[([0-9;]*)m", screen):
             self.assertFalse(any(30 <= int(code) <= 49 or 90 <= int(code) <= 107 for code in attributes.split(";") if code), attributes)

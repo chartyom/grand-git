@@ -20,6 +20,14 @@ import (
 type directActionMsg struct{ action popupAction }
 type directFrameMsg struct{}
 
+type terminalPaneFrame struct {
+	Pane
+	title            string
+	lines            []string
+	cursorX, cursorY int
+	cursorVisible    bool
+}
+
 func directFrameTick() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return directFrameMsg{} })
 }
@@ -37,6 +45,7 @@ type continuousDashboard struct {
 	project       *Project
 	task          int
 	pane          string
+	frame         []terminalPaneFrame
 	width, height int
 	listFocus     bool
 	form          *createForm
@@ -100,6 +109,38 @@ func (m continuousDashboard) terminalPanes() Snapshot {
 	return panes
 }
 
+// Bubble Tea calls View after each input message. Sample tmux on the frame
+// clock so forwarding a key does not recapture every pane in the window.
+func (m *continuousDashboard) captureTerminalFrame() {
+	panes := m.terminalPanes()
+	m.frame = make([]terminalPaneFrame, len(panes))
+	for i, pane := range panes {
+		frame := &m.frame[i]
+		frame.Pane = pane
+		if compact(m.width, m.height) && m.listFocus {
+			continue
+		}
+		info, err := m.project.tmux("display-message", "-p", "-t", pane.ID, "#{cursor_x} #{cursor_y} #{cursor_flag} #{pane_title}")
+		if parts := strings.SplitN(info, " ", 4); err == nil && len(parts) >= 3 {
+			x, xerr := strconv.Atoi(parts[0])
+			y, yerr := strconv.Atoi(parts[1])
+			frame.cursorX, frame.cursorY = x, y
+			frame.cursorVisible = parts[2] == "1" && xerr == nil && yerr == nil
+			if len(parts) == 4 {
+				frame.title = parts[3]
+			}
+		}
+		captured, err := m.project.tmux("capture-pane", "-p", "-e", "-N", "-t", pane.ID)
+		if err == nil {
+			// Decode the whole capture to retain styles across rows. Each
+			// rendered line ends its own styling before an adjacent pane.
+			canvas := lipgloss.NewCanvas(min(pane.Width, m.width), min(pane.Height, m.height))
+			canvas.Compose(lipgloss.NewLayer(captured))
+			frame.lines = strings.Split(canvas.Render(), "\n")
+		}
+	}
+}
+
 func (m continuousDashboard) syncTerminalSize() {
 	if m.width < 1 || m.height < 1 {
 		return
@@ -153,6 +194,7 @@ func (m continuousDashboard) open(a popupAction) (tea.Model, tea.Cmd) {
 	m.side.message = ""
 	m.listFocus = false
 	m.side.active = false
+	m.captureTerminalFrame()
 	return m, requestSidebarRefresh
 }
 
@@ -284,7 +326,8 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
-		if len(m.terminalPanes()) == 0 {
+		m.captureTerminalFrame()
+		if len(m.frame) == 0 {
 			m.listFocus, m.side.active = true, true
 			m.task, m.side.task, m.pane = -1, -1, ""
 		}
@@ -316,6 +359,7 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if _, ok := msg.(tea.WindowSizeMsg); ok {
 			m.syncTerminalSize()
+			m.captureTerminalFrame()
 			return m, resetViewport()
 		}
 		if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+w" {
@@ -382,6 +426,7 @@ normalInput:
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.syncTerminalSize()
+		m.captureTerminalFrame()
 		width := sidebarWidth(m.width)
 		if compact(m.width, m.height) {
 			width = m.width
@@ -391,8 +436,9 @@ normalInput:
 		return m.updateSidebar(msg)
 	case tea.KeyPressMsg:
 		if msg.String() == "esc" && m.listFocus && compact(m.width, m.height) &&
-			m.side.modal == "" && !m.side.confirming && !m.side.searching && m.side.query == "" && len(m.terminalPanes()) > 0 {
+			m.side.modal == "" && !m.side.confirming && !m.side.searching && m.side.query == "" && len(m.frame) > 0 {
 			m.listFocus, m.side.active = false, false
+			m.captureTerminalFrame()
 			return m, nil
 		}
 		if msg.String() == "ctrl+w" {
@@ -400,15 +446,16 @@ normalInput:
 			m.side.search.Blur()
 			m.side.hover = nil
 			if m.listFocus {
-				if len(m.terminalPanes()) == 0 {
+				if len(m.frame) == 0 {
 					return m, nil
 				}
 				m.listFocus = false
-				if panes := m.terminalPanes(); len(panes) > 0 {
-					m.pane = panes[0].ID
+				m.pane = m.frame[0].ID
+				if compact(m.width, m.height) {
+					m.captureTerminalFrame()
 				}
 			} else {
-				panes := m.terminalPanes()
+				panes := m.frame
 				found := false
 				for i, pane := range panes {
 					if pane.ID == m.pane && i+1 < len(panes) {
@@ -606,7 +653,7 @@ func (m continuousDashboard) terminalView(width, height int) []string {
 	if width < 1 || height < 1 {
 		return lines
 	}
-	panes := m.terminalPanes()
+	panes := m.frame
 	if len(panes) == 0 {
 		message := m.side.cfg.text("No terminal open", "Нет открытого терминала")
 		lines[height/2] = strings.Repeat(" ", max(0, (width-ansi.StringWidth(message))/2)) + ansi.Truncate(message, width, "…")
@@ -630,8 +677,7 @@ func (m continuousDashboard) terminalView(width, height int) []string {
 		x, titleY := pane.X-minX, pane.Y-minY
 		span := max(0, min(pane.Width, width-x))
 		if span > 0 && titleY >= 0 && titleY < height {
-			title, _ := m.project.tmux("display-message", "-p", "-t", pane.ID, "#{pane_title}")
-			title = ansi.Truncate(oneLine(title), max(0, span-3), "")
+			title := ansi.Truncate(oneLine(pane.title), max(0, span-3), "")
 			header := strings.Repeat("─", span)
 			if span >= 3 {
 				header = "─ " + title + " " + strings.Repeat("─", max(0, span-3-ansi.StringWidth(title)))
@@ -643,18 +689,16 @@ func (m continuousDashboard) terminalView(width, height int) []string {
 			}
 			segments[titleY] = append(segments[titleY], segment{x, span, header})
 		}
-		captured, err := m.project.tmux("capture-pane", "-p", "-e", "-N", "-t", pane.ID)
-		if err != nil || span == 0 {
+		if span == 0 {
 			continue
 		}
-		// Decode the whole capture to retain styles across rows, then render
-		// self-contained lines so pane attributes cannot reach adjacent UI.
-		canvas := lipgloss.NewCanvas(span, pane.Height)
-		canvas.Compose(lipgloss.NewLayer(captured))
 		y := 1 + pane.Y - minY
-		for i, line := range strings.Split(canvas.Render(), "\n") {
+		for i, line := range pane.lines {
 			if y+i >= height || y+i < 0 {
 				continue
+			}
+			if span < pane.Width {
+				line = ansi.Truncate(line, span, "")
 			}
 			segments[y+i] = append(segments[y+i], segment{x, span, line})
 		}
@@ -712,7 +756,7 @@ func (m continuousDashboard) View() tea.View {
 }
 
 func (m continuousDashboard) terminalCursor(origin int) *tea.Cursor {
-	panes := m.terminalPanes()
+	panes := m.frame
 	if len(panes) == 0 || m.listFocus {
 		return nil
 	}
@@ -722,36 +766,21 @@ func (m continuousDashboard) terminalCursor(origin int) *tea.Cursor {
 		minY = min(minY, pane.Y)
 	}
 	for _, pane := range panes {
-		if pane.ID != m.pane {
+		if pane.ID != m.pane || !pane.cursorVisible {
 			continue
 		}
-		info, err := m.project.tmux("display-message", "-p", "-t", pane.ID, "#{cursor_x} #{cursor_y} #{cursor_flag}")
-		if err != nil {
-			return nil
-		}
-		parts := strings.Fields(info)
-		if len(parts) != 3 || parts[2] != "1" {
-			return nil
-		}
-		x, xerr := strconv.Atoi(parts[0])
-		y, yerr := strconv.Atoi(parts[1])
-		if xerr != nil || yerr != nil {
-			return nil
-		}
-		return tea.NewCursor(origin+pane.X-minX+x, 1+pane.Y-minY+y)
+		return tea.NewCursor(origin+pane.X-minX+pane.cursorX, 1+pane.Y-minY+pane.cursorY)
 	}
 	return nil
 }
 
 func (m continuousDashboard) terminalTitle() string {
-	if m.pane == "" {
-		return "Grand Git"
+	for _, pane := range m.frame {
+		if pane.ID == m.pane && pane.title != "" {
+			return pane.title
+		}
 	}
-	title, err := m.project.tmux("display-message", "-p", "-t", m.pane, "#{pane_title}")
-	if err != nil || title == "" {
-		return "Grand Git"
-	}
-	return title
+	return "Grand Git"
 }
 
 var tmuxStatusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#151B12")).Background(lipgloss.Color("#9ECE6A"))

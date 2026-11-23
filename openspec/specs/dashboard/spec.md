@@ -29,6 +29,11 @@ New dashboard invocations SHALL keep one gg TUI process across project switches 
 - **WHEN** a new dashboard opens tasks in different project servers and returns
 - **THEN** its gg PID, list state and user terminal PIDs remain unchanged
 
+#### Scenario: Typing in a split terminal
+- **WHEN** the user types a command into the focused pane while several terminal panes are visible
+- **THEN** the dashboard forwards the input in order without recapturing all panes for each keystroke
+- **AND** live terminal output, pane titles and the cursor continue to refresh
+
 #### Scenario: Unavailable target server
 - **WHEN** opening a task in another project fails
 - **THEN** the dashboard remains open on the previous task and shows the error

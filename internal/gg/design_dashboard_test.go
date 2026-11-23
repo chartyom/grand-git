@@ -1,6 +1,8 @@
 package gg
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,69 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestTerminalTypingUsesDisplayedFrame(t *testing.T) {
+	side := designFixture(t)
+	dir := t.TempDir()
+	side.p.Root, side.p.Socket = dir, "test"
+	calls := filepath.Join(dir, "calls")
+	t.Setenv("GG_TMUX_CALLS", calls)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	script := `#!/bin/sh
+shift 2
+printf '%s\n' "$*" >>"$GG_TMUX_CALLS"
+case "$1" in
+  list-panes)
+    printf '%%0\t@1\t1\t0\t0\t0\tsh\ts\t0\t0\t16\t3\t60\t4\t0\t10\t\n'
+    printf '%%1\t@1\t1\t0\t0\t1\tsh\ts\t17\t0\t20\t3\t60\t4\t0\t11\t\n' ;;
+  display-message)
+    case "$4" in
+      %0) echo '2 0 1' ;;
+      %1) echo '5 1 1 right pane' ;;
+    esac ;;
+  capture-pane)
+    case "$6" in
+      %0) echo 'left output' ;;
+      %1) echo 'right output' ;;
+    esac ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	m := continuousDashboard{side: side, project: side.p, task: 1, pane: "%0", width: 120, height: 24}
+	m.captureTerminalFrame()
+	v := m.View()
+	if v.WindowTitle != "Grand Git" || v.Cursor == nil || v.Cursor.X != sidebarWidth(m.width)+1+2 {
+		t.Fatalf("untitled pane lost its cursor or default title: %+v, %q", v.Cursor, v.WindowTitle)
+	}
+	m.pane = "%1"
+	if err := os.Truncate(calls, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range "hello" {
+		next, _ := m.Update(key(k))
+		m = next.(continuousDashboard)
+		v := m.View()
+		if !strings.Contains(v.Content, "left output") || !strings.Contains(v.Content, "right output") || v.WindowTitle != "right pane" {
+			t.Fatalf("displayed pane contents or title changed during input: %s", v.Content)
+		}
+		if v.Cursor == nil || v.Cursor.X != sidebarWidth(m.width)+1+17+5 || v.Cursor.Y != 2 {
+			t.Fatalf("incorrect cursor during input: %+v", v.Cursor)
+		}
+	}
+	raw, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected []string
+	for _, k := range "hello" {
+		expected = append(expected, "send-keys -l -t %1 "+string(k))
+	}
+	if got := strings.Split(strings.TrimSpace(string(raw)), "\n"); !reflect.DeepEqual(got, expected) {
+		t.Fatalf("tmux calls during terminal typing: %q, want %q", got, expected)
+	}
+}
 
 func designFixture(t *testing.T) sidebar {
 	t.Helper()
