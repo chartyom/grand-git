@@ -114,28 +114,6 @@ func TestLegacyStatusAndFilteredSessionList(t *testing.T) {
 	}
 }
 
-func TestLayoutPreservesTerminalTreeWhenSidebarIsRemoved(t *testing.T) {
-	parser := layoutParser{s: "120x30,0,0{30x30,0,0,9,89x30,31,0[89x14,31,0,1,89x15,31,15{44x15,31,15,2,44x15,76,15,3}]}"}
-	tree, err := parser.node()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tree = tree.remove(9)
-	tree.fit(119, 35, 41, 0)
-	layout := tree.String()
-	reparsed := layoutParser{s: layout}
-	again, err := reparsed.node()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if again.kind != '[' || again.children[1].kind != '{' || again.children[0].pane != 1 || again.children[1].children[0].pane != 2 || again.children[1].children[1].pane != 3 {
-		t.Fatal(layout)
-	}
-	if strings.Contains(layout, ",9") {
-		t.Fatal("sidebar still in terminal layout")
-	}
-}
-
 func TestManagedPathsSupportLegacyAndPreventTraversal(t *testing.T) {
 	p := &Project{Root: filepath.Join(t.TempDir(), "repo")}
 	if !p.validManagedPath(&Task{ID: 1, Branch: "feat/login", Path: p.Root + "__sessions/1"}) {

@@ -439,15 +439,14 @@ func (p *Project) resize() error {
 				if side.Active {
 					p.tmux("select-pane", "-t", target.ID)
 				}
-				if _, err = p.tmux("break-pane", "-d", "-s", side.ID, "-t", "_gg-park:"); err != nil {
+				// tmux 3.7 requires an explicit window name to park a pane safely.
+				if _, err = p.tmux("break-pane", "-d", "-n", "sidebar", "-s", side.ID, "-t", "_gg-park:"); err != nil {
 					return err
 				}
 			}
 		} else if side.Session == "_gg-park" {
-			if _, err = p.tmux("join-pane", "-d", "-h", "-b", "-l", strconv.Itoa(sidebarWidth(target.WindowWidth)), "-s", side.ID, "-t", target.ID); err != nil {
-				return err
-			}
-			if err = p.layoutSidebar(side.ID, target.Window); err != nil {
+			// Join beside the whole window so tmux keeps each terminal in its split.
+			if _, err = p.tmux("join-pane", "-d", "-f", "-h", "-b", "-l", strconv.Itoa(sidebarWidth(target.WindowWidth)), "-s", side.ID, "-t", target.ID); err != nil {
 				return err
 			}
 		} else if width := sidebarWidth(target.WindowWidth); side.Width != width {
@@ -457,15 +456,6 @@ func (p *Project) resize() error {
 		}
 	}
 	return nil
-}
-
-// Tmux split -f spans the full window. For restored sidebars use a saved
-// terminal layout, nested to the right of one full-height sidebar.
-func (p *Project) layoutSidebar(side, window string) error {
-	// The side pane is already at the left. Joining against the entire window
-	// via -f isn't portable to 3.4; swapping it out and split -f would restart UI.
-	// A generated tmux layout keeps every user pane and its relative geometry.
-	return p.fullHeightSidebar(side, window)
 }
 
 func (p *Project) addSidebar(target string, id int) error {

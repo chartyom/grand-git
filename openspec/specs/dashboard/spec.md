@@ -164,7 +164,8 @@ The sidebar SHALL occupy 25% of the window within 28–56 columns. Below 100 col
 
 #### Scenario: Wide narrow wide
 - **WHEN** the window widens, narrows and widens again
-- **THEN** the list resizes, hides and returns; terminal PIDs and relative positions remain
+- **THEN** the list returns to its full-height column on the left
+- **AND** terminal panes keep their PIDs and their positions relative to each other as the available area changes
 
 #### Scenario: Compact session access
 - **WHEN** the list is hidden and the user presses Ctrl+W after the last terminal pane

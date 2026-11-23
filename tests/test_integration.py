@@ -442,6 +442,33 @@ class SessionsTest(SessionFixture):
         self.assertTrue(all(int(p[4]) > int(side[4]) for p in user))
         self.assertEqual(user[0][5], user[1][5])
 
+    def test_restore_sidebar_preserves_nested_terminal_positions(self):
+        self.create("nested")
+        top = self.terminal()
+        side = self.sidebar()
+        right = self.tmux("split-window", "-d", "-h", "-t", top, "-P", "-F", "#{pane_id}").stdout.strip()
+        bottom = self.tmux("split-window", "-d", "-v", "-t", top, "-P", "-F", "#{pane_id}").stdout.strip()
+        pids = {row[0]: row[8] for row in self.geometry(1)}
+
+        for width in (99, 160, 80, 120):
+            self.tmux("resize-window", "-t", top, "-x", str(width))
+            self.gg("_resize")
+            rows = {row[0]: row for row in self.geometry(1)}
+            self.assertEqual({pane: row[8] for pane, row in rows.items()}, pids)
+            left = 0
+            if width < 100:
+                self.assertEqual(rows[side][3], "_gg-park")
+            else:
+                self.assertEqual(rows[side][3:5], ["dashboard", "0"])
+                self.assertEqual(int(rows[side][6]), width // 4)
+                left = width // 4 + 1
+            self.assertEqual(int(rows[top][4]), left)
+            self.assertEqual(rows[top][4], rows[bottom][4])
+            self.assertEqual(rows[top][5], rows[right][5])
+            self.assertGreater(int(rows[bottom][5]), int(rows[top][5]))
+            self.assertEqual(int(rows[right][4]), left + int(rows[top][6]) + 1)
+            self.assertEqual(int(rows[right][4]) + int(rows[right][6]), width)
+
     def test_search_filter_mouse_and_split_cancel(self):
         self.create("feat/alpha")
         self.create("fix/beta")

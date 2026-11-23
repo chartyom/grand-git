@@ -162,8 +162,16 @@ class DesignDashboardTests(SessionFixture):
                 for pane in (first, second)}
         for width, height, origin, terminal_width in ((99, 24, 0, 99), (160, 42, 41, 119)):
             self.resize_client(self.proc, self.master, width, height)
-            wait_for(lambda: sum(int(self.tmux("display-message", "-p", "-t", pane, "#{pane_width}").stdout)
-                                 for pane in (first, second)) + 1 == terminal_width)
+            def terminal_area_ready():
+                widths = [int(row[6]) for row in self.geometry(task) if row[0] in (first, second)]
+                return len(widths) == 2 and sum(widths) + 1 == terminal_width
+
+            try:
+                wait_for(terminal_area_ready)
+            except AssertionError:
+                outer = self.outer_tmux("display-message", "-p", "-t", "preview:0", "#{window_width}x#{window_height}")
+                self.fail(f"Requested {width}x{height}, outer window {outer.stdout.strip()}, "
+                          f"expected terminal area {terminal_width}, inner panes {self.geometry(task)}")
             sync_terminal(second, "GG_COLOR_RESIZE_READY_" + str(width))
             paint(first, 22, "+ left " + str(width))
             paint(second, 52, "- right " + str(width))
