@@ -14,7 +14,11 @@ The canonical repository SHALL be https://github.com/chartyom/grand-git. The Go 
 - **THEN** they use the canonical repository and module path, and release binaries retain embedded version, commit and build date
 
 ### Requirement: Portable runtime targets
-Grand Git SHALL build for Linux and macOS on amd64 and arm64. Windows SHALL use the Linux build through WSL2 rather than a native binary. Runtime SHALL require Git 2.31+ and tmux 3.4+, without Go or Node.js. macOS SHALL enumerate process ownership without /proc and preserve start-time checks before signals; ordinary copying SHALL preserve independent files and metadata. Native platform validation SHALL be reported separately from cross-compilation.
+Grand Git SHALL build for Linux and macOS on amd64 and arm64. Windows SHALL use the Linux build in WSL2. Current source builds SHALL support Git 2.31+ for worktrees. Terminals SHALL require tmux 3.4+. Binaries SHALL run without Go or Node.js. macOS SHALL enumerate process ownership without /proc and preserve start-time checks before signals. Ordinary copying SHALL preserve independent files and metadata. Native platform validation SHALL be reported separately from cross-compilation.
+
+#### Scenario: Ordinary directory without Git
+- **WHEN** a user runs the binary with tmux 3.4+ in an ordinary directory without Git installed
+- **THEN** the user can create a terminal session in that directory
 
 #### Scenario: macOS build and process lifecycle
 - **WHEN** built for either macOS architecture
@@ -51,11 +55,15 @@ The installer SHALL default to chartyom/grand-git. GG_REPOSITORY SHALL allow a v
 - **THEN** release URLs use chartyom/grand-git or the explicit override respectively; invalid repository values fail before downloading
 
 ### Requirement: Factual public onboarding
-Both READMEs SHALL summarize the session workflow, prerequisites, source builds, first use, safeguards and explicit folder sections, linking installation details. Clone/download examples SHALL use chartyom/grand-git and version placeholders. Documentation SHALL describe installation steps without assistant commentary or publication-status caveats. Update/uninstall guidance SHALL distinguish executables from project files and running sessions.
+Both READMEs SHALL lead with binary installation, state version-specific prerequisites, cover source builds, first use, safeguards and folder sections, and link to the installation guide. Download examples SHALL use chartyom/grand-git and either the latest stable release URL or a published tag. Update and uninstall instructions SHALL explain what happens to executables, files and running sessions.
 
 #### Scenario: Choosing an installation method
 - **WHEN** a user reads the installation guide
-- **THEN** source builds, release archives and the installer have concrete instructions, with version placeholders explained
+- **THEN** the guide provides runnable instructions for the latest stable installer, a specific published version, manual archive installation and source builds
+
+#### Scenario: Git requirements for v1.0.0
+- **WHEN** a user installs Grand Git v1.0.0 for a Git project
+- **THEN** the documentation specifies Git 2.36+ for that release and explains that the installer accepts Git 2.31+ even though Git 2.31 through 2.35 lack the worktree listing option used by v1.0.0
 
 ### Requirement: Shell alias troubleshooting
 Both READMEs SHALL link to installation troubleshooting for a shell alias named `gg` that invokes `git gui`. The installation guide SHALL explain how to inspect command resolution, run the executable despite the alias and remove the alias for current and future shells.

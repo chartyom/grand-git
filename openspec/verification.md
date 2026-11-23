@@ -1,8 +1,22 @@
 # Current verification
 
-Date: 2026-11-16.
+## v1.0.1 release preparation (2026-11-23)
 
-## Scope
+- The delegated usage-skill review checked the Git requirements for v1.0.1 and v1.0.0 against the worktree discovery implementation, updated the stable download link and pinned installer example, and confirmed the CLI and installer help. The legacy Git worktree regression test and all six installer fixture tests passed.
+- OpenSpec validation passed for all eight specifications.
+
+## Public release documentation for v1.0.0 (2026-11-23)
+
+Requirements: installation / Factual public onboarding, Portable runtime targets, Verified user installation, Versioned release artifacts.
+
+- GitHub listed [v1.0.0](https://github.com/chartyom/grand-git/releases/tag/v1.0.0) as the latest stable release, published November 16, 2026. All four published archives matched `checksums.txt` and contained the same eight paths. The downloaded Linux amd64 executable reported version 1.0.0 and commit `3f8b9d4`.
+- On Linux amd64, the latest and pinned installers, manual checksum and extraction instructions, tagged source build, and `go install` with both `@v1.0.0` and `@latest` succeeded. Replacing a disposable installation with `--force` and then removing the executable preserved the live terminal PID and worktree. The six installer fixture tests passed.
+- The published executable failed to create a worktree with native Git 2.31.0, 2.34.1 and 2.35.1 because `git worktree list` rejected `-z`. It created, listed and deleted worktrees with Git 2.36.0 and 2.43.0. A build of `fcf9d51` also passed that sequence with Git 2.35.1.
+- The README walkthrough exercised ignored-file copying, stop/start, deletion and branch preservation in a temporary repository. Eleven targeted CLI/dashboard integration tests passed on a build of the release tag. All fifteen template tests passed with the published Linux binary and test executables for the preset applications. The binary read all seven documented template examples through `gg template show`.
+- Running the demo recorder with the release binary verified independent worktrees and stable terminal PIDs after switching sessions and quitting. The published PNG matches the final frame of the shipped 94-frame GIF.
+- Checked all 36 relative links, images and heading fragments in the revised consumer guides in a fresh checkout with the documentation patch applied. All 22 such references in the bundled guides also resolved using the published archive layout. All nine distinct external documentation links returned HTTP 200.
+
+## Directory sections (2026-11-16)
 
 Explicit directory sections in the Go dashboard and offline HTML prototype. Dashboard launches with list focus, no open terminal and no automatic session or calling-directory registration. Worktrees and plain terminals share a list. Section membership retains exact directory paths while Git workspaces, public IDs and CLI bulk scope remain unchanged. Existing catalogs migrate to root sections; legacy clients retain invocation-owned temporary cleanup.
 

@@ -26,6 +26,6 @@ Grand Git (`gg`) manages parallel tasks across Git projects and ordinary directo
 
 ## Environment
 
-Building requires Go 1.26+. Git operations require Git 2.31+; interactive terminals require tmux 3.4+. Runtime targets are Linux/WSL2 and macOS on amd64/arm64; native Windows and bare repositories are unsupported. Python 3 supports integration tests. OpenSpec validation requires Node.js 22.12+ and npx.
+Building requires Go 1.26+. For Git projects, v1.0.1 supports Git 2.31+ and v1.0.0 requires Git 2.36+. Ordinary directory sessions can run without Git. Terminal sessions require tmux 3.4+. Runtime targets are Linux/WSL2 and macOS on amd64/arm64. Native Windows and bare repositories are unsupported. Python 3 supports integration tests. OpenSpec validation requires Node.js 22.12+ and npx.
 
 The canonical repository is https://github.com/chartyom/grand-git and the Go module is github.com/chartyom/grand-git. GoReleaser targets that repository, and the installer uses chartyom/grand-git unless GG_REPOSITORY overrides it. The release configuration builds four Linux/macOS archives, SHA-256 checksums and an installer.

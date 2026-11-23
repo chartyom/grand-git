@@ -6,7 +6,7 @@ The walkthrough creates `feat/login`, edits `app.py`, creates `fix/header` throu
 
 ## Regenerate
 
-Requirements: the project's build/runtime dependencies, Python 3 with venv support, [agg 1.9.0](https://github.com/asciinema/agg/releases/tag/v1.9.0) on PATH, and the DejaVu Sans Mono font.
+The recorder runs from a source checkout. In addition to the project's build and runtime dependencies, it uses Python 3.11+ with venv and pip, the DejaVu Sans Mono font, and [agg 1.9.0](https://github.com/asciinema/agg/releases/tag/v1.9.0) on PATH.
 
 From the repository root:
 

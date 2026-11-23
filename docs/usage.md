@@ -1,10 +1,12 @@
 # Grand Git usage reference
 
-[Quick start](../README.md) · [Extended reference](usage.ru.md) · [Installation](installation.md)
+[Quick start](../README.md) · [Quick start in Russian](../README.ru.md) · [Installation](installation.md)
 
 ## Session identity and creation
 
-Commands accept global positional IDs such as `3:7` (group:session) from any directory. Exact branch names address the current Git project: `gg delete 1` still means branch `1`. Registered Git branch names remain reserved while stopped. `gg list` and `gg list --json` show every known group, including stopped managed sessions and running legacy sources. Source worktrees are not automatically registered; an empty project may have no sessions until a session is explicitly created.
+`gg list` and `gg list --json` show registered sessions across known projects and directories, including stopped tasks. Each session has a global ID such as `3:7` (group:session). Use this ID with `gg start`, `gg stop` or `gg delete` from any directory. In a Git project, these commands also accept an exact branch name. For example, `gg stop 1` addresses a branch named `1`. A stopped session keeps its branch name reserved. A fresh project has no sessions until you create one.
+
+Run the creation examples in a Git worktree with at least one commit. The `--base` example assumes a branch named `release/1.0`; substitute a branch or commit from your project.
 
 ```sh
 gg create feat/login
@@ -15,43 +17,41 @@ gg create feat/server --choose-template
 gg list --json
 ```
 
-Without `--base`, new branches start at the calling worktree's HEAD. An existing free branch can be attached without `--base`; a branch checked out elsewhere cannot be taken over. Only a missing branch name is prompted. `--choose-template` explicitly opens the optional TTY picker; it cannot be combined with `--template`.
+Without `--base`, new branches start at the calling worktree's HEAD. An existing free branch can be attached without `--base`; a branch checked out elsewhere cannot be taken over. In an interactive terminal, `gg create` prompts for a missing Git branch name. Scripts must supply the branch name. `--choose-template` requires interactive input and output and cannot be combined with `--template`.
 
 New folders use `<project>__sessions/<branch>`, preserving slashes. Existing paths are not moved. Creation starts the terminal in the background and returns without waiting for application success. Bare repositories are unsupported.
 
 Outside Git, `gg create [name]` creates a persistent terminal in the current directory. No name or branch prompt is required; the default name is the directory name and duplicate names are allowed. `--base` and `--no-copy` require Git. Deleting a directory session only removes processes and registration, preserving all its files, even if the folder later becomes a Git repository.
 
-Groups are recorded under `$XDG_STATE_HOME/grand-git` (fallback `~/.local/state/grand-git`). Git worktrees share one group; ordinary directories have separate groups. Legacy projects are discovered on their next working gg invocation; the filesystem is not scanned.
+Groups are recorded under `$XDG_STATE_HOME/grand-git` when `XDG_STATE_HOME` is an absolute path, or `~/.local/state/grand-git` otherwise. Git worktrees share one group; ordinary directories have separate groups. An existing project with older gg session records joins the catalog when you run a workspace command such as `gg list` there.
 
 ## Environment copying
 
-Creation copies Git-ignored, untracked files, including `.env`, `.agents` and `node_modules`, unless `--no-copy` is supplied. If an explicit local base branch has a worktree, that is the source; otherwise the calling worktree is used.
+Worktree creation copies untracked files covered by Git ignore rules. For example, `.env`, `.agents` and `node_modules` are copied if your ignore rules cover them. Use `--no-copy` to skip this step. If an explicit local base branch has a worktree, that worktree supplies the files. Otherwise gg copies them from the calling worktree.
 
 Copies are independent: Linux attempts reflink with ordinary-copy fallback; macOS uses ordinary copying. File permissions and mtime are preserved. Symlinks are copied without following them. Files already present in the destination branch are not replaced. `.git`, shared ignored `.gg`, nested repositories and special files are excluded. Environments are not synchronized afterward, and npm dependencies are not automatically checked or installed.
 
 ## Lifecycle and safeguards
 
 ```sh
-gg start feat/login
 gg stop feat/login
 gg start feat/login --template shell
-gg stop --all --yes
-gg delete feat/login --yes
-gg delete --all --yes
-gg delete feat/login --force --yes
+gg delete feat/login
 ```
 
 `stop` ends shells, agents, servers and background jobs in the session's terminals. It preserves files and registration. `start` creates a new terminal and runs the current definition of the saved template. It does not resume a stopped agent process. Starting an active session is idempotent; changing its template requires stopping first.
 
 `delete` removes a managed worktree and record, preserving its Git branch. Without `--force`, changed and ordinary untracked files block deletion. Ignored files are removed with the worktree. Untouched integration-generated files may be removed; user modifications remain protected.
 
-Source and registered external worktrees are protected from deletion even with `--force`. `stop --all` includes them. `delete --all` stops their terminals while preserving their folders and branches. Inactive legacy source records are retired; ordinary and managed stopped records remain until deleted. A failed or malformed tmux query never authorizes source retirement. Bulk deletion checks all targets before stopping anything. Noninteractive confirmations require `--yes`; that flag does not authorize losing changed files. Branch arguments and `--all` are scoped to the current Git project; outside Git, `--all` addresses the current directory group. Composite IDs address the exact group and session from anywhere.
+Use `gg stop --all` or `gg delete --all` to act on all sessions in the current Git project, across its folder sections. Outside Git, `--all` targets only the current directory group. Bulk deletion checks every target before stopping any processes. Deletion and bulk stop ask for confirmation. Pass `--yes` to confirm in a script. Discarding modified or ordinary untracked worktree files also requires `--force`.
+
+Source and registered external worktrees are protected from deletion even with `--force`. Both bulk commands stop their terminals and preserve their directories and branches. Inactive legacy source records are retired. Ordinary and managed stopped sessions stay registered until deleted.
 
 Stopping or deleting a background task preserves the current window and focus. Closing the currently open task returns to the service list. Operations that close their invoking terminal finish in a detached worker. External failures may leave a partial result, reported explicitly.
 
 ## Folder sections and dashboard startup
 
-Dashboard opens the saved section list without creating a session, opening a terminal or adding its calling directory. Press + to open the directory browser. Type or paste a path, or navigate folders with the mouse, arrows and Enter; Backspace/Left goes to the parent. Tab moves between the path, folder list and buttons. Ctrl+S confirms and Esc cancels. Relative paths use the original calling directory, `~/` expands the home directory, and hidden directories are listed. Invalid or inaccessible paths retain the form for correction.
+`gg dashboard` opens the saved section list. On first use, press + to add a directory. Type or paste a path, or navigate folders with the mouse, arrows and Enter. With the folder list focused, Backspace or Left opens the parent directory. Tab moves between the path, folder list and buttons. Ctrl+S confirms and Esc cancels. Relative paths use the original calling directory, `~/` expands the home directory, and hidden directories are listed. Invalid or inaccessible paths retain the form for correction.
 
 Sections keep exact canonical paths. A Git root and its subdirectory can have separate sections while sharing the same repository, settings, tmux server and public workspace ID. Symlink aliases select the same existing section. Adding a section creates no terminal; T on it opens a persistent plain shell in its exact directory. N creates a worktree from that directory's HEAD, or an ordinary directory session. Worktree paths remain `<project>__sessions/<branch>`. Creation from a selected session retains its section and uses that session's directory as the base context.
 
@@ -81,15 +81,15 @@ A single session click or Enter opens it, starting a stopped session with its sa
 | , | Settings for the open project |
 | Q | Exit while persistent sessions keep running |
 
-Section confirmations freeze only that section's full target IDs independently of filtering. Disappeared targets are skipped; sessions created later are excluded. Delete all checks every surviving managed worktree before stopping any process. Modified or untracked files block deletion. Protected source directories, ordinary files and Git branches remain; stopped legacy source records are retired. Deleting a persistent plain terminal in Git removes its record and processes without removing repository files. These records remain addressable with start/stop/delete and their public IDs.
+Section confirmations capture that section's targets regardless of the current filter. Disappeared targets are skipped and sessions created later are excluded. Delete all checks every surviving managed worktree before stopping any process. Modified or ordinary untracked worktree files block deletion. Protected directories, ordinary directory files and Git branches are preserved. Use the public ID to start, stop or delete a persistent plain terminal in Git. Deleting it removes its processes and record and preserves repository files.
 
 Creation, template selection, placement, settings and confirmations appear as bounded overlays in new dashboards. Controls accept mouse and keyboard input, and creation errors preserve entered values. Git creation requires a branch and uses HEAD at the selected directory; ordinary creation offers an optional prefilled name. Tab opens the real template catalog; Esc returns without changing the name or saved choice. Settings belong to the open project, even when another section is selected; before opening a project, settings use global scope.
 
 Search is available only above ten session rows after All/Active filtering, counted across groups before text filtering or viewport clipping. Section headings do not count; existing legacy temporary session rows do. At ten or fewer candidates the query clears and the control disappears. / or Up above the first item focuses available search. While editing, only Clear and Down-to-list appear in the footer: Clear keeps input focus; Down, Enter or Down-to-list applies the query and restores list controls. Clicking an applied field resumes editing. Esc clears the query, reveals and selects the open terminal, and keeps list focus; it retains activity filtering unless that hides the open row. In compact mode a subsequent Esc closes the list only when a terminal is open.
 
-Success messages are green for five seconds from completion. Refresh, resize and returning to the list do not renew the deadline; newer notifications have independent deadlines. Errors remain visible. Agent `done` is a completed turn, not an expiring operation notice. `NO_COLOR` disables colors.
+Successful background stop and delete operations show a green notice for five seconds after completion. Refresh, resize and returning to the list do not renew the deadline; newer notifications have independent deadlines. Errors remain visible. Agent `done` is a completed turn, not an expiring operation notice. `NO_COLOR` disables colors.
 
-The list uses 25% of the window, bounded to 28–56 columns. Below 100 columns or 16 rows it hides; Ctrl+W opens a full-screen list after the last terminal pane, and Ctrl+W or Esc closes it when a terminal is open. Without an open terminal the list remains accessible. Resizing preserves user processes and pane geometry. `Active <active>/<total>` counts session records and active sessions across available groups, including running legacy source records and excluding service panes. An unavailable group is reported without hiding healthy groups. `list --json` still prints valid healthy records but exits nonzero and reports the error on stderr.
+The list uses 25% of the window, bounded to 28–56 columns. Below 100 columns or 16 rows it hides; Ctrl+W opens a full-screen list after the last terminal pane, and Ctrl+W or Esc closes it when a terminal is open. Without an open terminal the list remains accessible. Resizing preserves running processes and adjusts pane sizes to fit the window. `Active <active>/<total>` counts session records and active sessions across available groups, including running legacy source records and excluding service panes. An unavailable group is reported without hiding healthy groups. `list --json` still prints valid healthy records but exits nonzero and reports the error on stderr.
 
 ## Settings and templates
 
@@ -101,20 +101,20 @@ gg template list --json
 gg template show codex
 ```
 
-Effective settings combine built-ins, global YAML and shared primary-worktree `.gg/config.yaml`. Globals use `$XDG_CONFIG_HOME/grand-git/config.yaml` or `~/.config/grand-git/config.yaml`. `set/reset` and compatible `config set/reset` default to globals; `--local` and `--project` select the project. Changes do not restart terminals. Legacy TOML is read until that layer has YAML; its first write migrates the layer while keeping the old file.
+`gg config` shows effective values and their sources. Project settings in the primary worktree's `.gg/config.yaml` override globals, and global settings override built-ins. Globals use `$XDG_CONFIG_HOME/grand-git/config.yaml` when `XDG_CONFIG_HOME` is an absolute path, or `~/.config/grand-git/config.yaml` otherwise. `set/reset` and compatible `config set/reset` default to globals. `--local` and `--project` select the project. Changes take effect without restarting terminals. Legacy TOML is read until that layer has YAML. Its first write migrates supported settings and keeps the old file. Resetting the last key leaves the YAML mapping `{}` so old TOML values stay inactive.
 
 Outside Git, only global settings and templates apply; a directory’s `.gg` is ignored, and `--local` is rejected. Dashboard settings belong to its open group, rather than the highlighted foreign row.
 
 Defaults: `language=en`, `default_template=shell`. Dashboard settings save all selected fields to Global or Local with Enter; Esc cancels.
 
-Built-ins are `shell`, `codex`, `claude` and `npm-dev`. Definitions contain a `commands` list; global `grand-git/templates` definitions override built-ins and primary `.gg/templates` override globals. `shell` is reserved. Sessions save a template name and resolve its current definition on cold start. A missing definition fails explicitly; recover with `start <branch> --template shell`. Default changes affect only future sessions. Extra terminals open plain shells.
+Built-ins are `shell`, `codex`, `claude` and `npm-dev`. Definitions contain a `commands` list. The `templates/` directory beside the global config file can override built-ins, and the primary worktree's `.gg/templates/` can override globals. The name `shell` is reserved. `gg template list --json` returns names and sources, and `gg template show NAME` prints the selected definition as YAML. A session saves the template name and reads its current definition when restarted. If the definition goes missing, restore it or run `gg start ID --template shell` with the session ID from `gg list`. Default changes affect only future sessions. Extra terminals open plain shells.
 
-Configured commands run sequentially in one interactive sh/bash/zsh context, after registration succeeds. A nonzero command skips the remaining commands. Completion, errors and Ctrl+C leave an interactive shell and visible exit status. `GG_BRANCH`, `GG_WORKTREE` and `GG_PROJECT_ROOT` are literal environment values. For ordinary/temporary sessions, branch is empty, worktree is the session’s directory and project root is the group directory. Programs, dependencies, ports and hook trust are not configured automatically. See [template examples](templates.md).
+Configured commands run sequentially in one interactive sh/bash/zsh context, after registration succeeds. A nonzero command skips the remaining commands. On return or Ctrl+C, gg displays the exit status and opens an interactive shell. An explicit shell `exit` or `exec` retains its usual meaning. Each terminal receives `GG_BRANCH` (empty for plain terminals), `GG_WORKTREE` (session directory) and `GG_PROJECT_ROOT` (primary worktree or ordinary group directory). Install any programs and dependencies your template invokes. See [template examples](templates.md).
 
 ## Codex hooks and automation
 
-`gg init` merges project-local Codex hooks/settings, preserving unrelated content and backing up originals under the Git common directory. Repeat initialization does not duplicate handlers. In Codex, inspect and trust handlers through `/hooks`; global settings and trust are not changed automatically. One primary Codex session is tracked per task. Other agents without integrated hooks show shell/unknown status.
+`gg init` merges project-local `.codex/hooks.json` and `.codex/config.toml`, preserving unrelated content. Backups of changed, nonempty originals are stored under `grand-git/hook-backups/` in the Git common directory. Future worktrees created by gg receive the hooks too. Repeat initialization does not duplicate handlers. In Codex, inspect and trust handlers through `/hooks`. One primary Codex session is tracked per task. Other agents without integrated hooks show shell/unknown status.
 
-`gg list --json` returns public `id` (a string such as `3:7`), `name`, `kind` (`source`, `worktree`, `terminal`, `temporary`), and `workspace` (`id`, `type`, `name`, `path`), plus branch, base, path, created_at, protected, active, temporary, terminals, agent_status, template and optional copy_source/copied_files. The branch and base are empty for persistent plain and temporary terminal records. A persistent plain terminal can have workspace.type=git when created from a Git folder action. Internal IDs alone and description are not exposed. `temporary` is false for stopped terminals. Machine keys and status codes remain English regardless of language: ready, working, waiting, done, interrupted, shell, stopped, unknown.
+`gg list --json` returns public `id` (a string such as `3:7`), `name`, `kind` (`source`, `worktree`, `terminal`, `temporary`), and `workspace` (`id`, `type`, `name`, `path`), plus `branch`, `base`, `path`, `created_at`, `protected`, `active`, `temporary`, `terminals`, `agent_status` and `template`. Copy metadata is optional. When zero files were copied, `copied_files` is omitted even if `copy_source` is present. The branch and base are empty for persistent plain and temporary terminal records. A plain terminal created in a Git section has `workspace.type` equal to `git`. Machine keys and status codes stay in English for every language setting. Agent codes are `ready`, `working`, `waiting`, `done`, `interrupted`, `shell`, `stopped` and `unknown`.
 
-Use ordinary Git commands inside a worktree for commits, pushes and PR/MR preparation. `gg` does not publish branches or create pull requests automatically. The [agent skill](skills/grand-git/SKILL.md) describes the same public interfaces.
+Use ordinary Git commands inside a worktree for commits and pushes, and your hosting provider's tools to create pull or merge requests. The source checkout includes the agent usage skill at `docs/skills/grand-git/SKILL.md`.

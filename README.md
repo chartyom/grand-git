@@ -14,17 +14,18 @@ Create a task, open a second worktree, and switch back with your edits and termi
 
 ## Install
 
-Runs on Linux, macOS and Linux inside WSL2. Terminal sessions require **tmux 3.4+**; Git projects also require **Git 2.31+**. Use an interactive terminal. Bare repositories and native Windows are unsupported.
+Grand Git ships binaries for Linux (including WSL2) and macOS on amd64 and arm64. Install **tmux 3.4+** for terminal sessions and **Git 2.31+** for Git projects with v1.0.1 (v1.0.0 requires Git 2.36+). The installer checks for both tools. Use a non-bare repository for Git tasks.
 
-From an existing source checkout, with **Go 1.26+**:
+Run these commands to install the latest stable release in `~/.local/bin`.
 
 ```sh
-go build -o bin/gg ./cmd/gg
-export PATH="$PWD/bin:$PATH"
+curl -fsSLo install-gg.sh https://github.com/chartyom/grand-git/releases/latest/download/install.sh &&
+  sh install-gg.sh
+export PATH="$HOME/.local/bin:$PATH"
 gg --version
 ```
 
-The repository is [chartyom/grand-git](https://github.com/chartyom/grand-git). The [installation guide](docs/installation.md) covers dependencies, permanent installation, archives, the release installer, updates and removal. Go and Node.js are not needed to run a built binary.
+To build from a source checkout with **Go 1.26+**, run `go build -o bin/gg ./cmd/gg` and use `./bin/gg`. For a pinned version, manual download, update or removal, see the [installation guide](docs/installation.md).
 
 If `gg` opens Git GUI or reports a missing `gui` command, check for a [shell alias named `gg`](docs/installation.md#if-gg-runs-git-gui).
 
@@ -36,7 +37,7 @@ gg dashboard                 # open saved folder sections and sessions
 
 Press +, choose a directory and confirm with Ctrl+S. On that section, press T for a plain shell or N to create a session. In Git, enter a branch name and press Enter to open the new task in its own worktree. Ctrl+W cycles through the list and terminal panes; Enter opens the selected session. The same gg dashboard process stays open when switching projects.
 
-You can also create tasks from the command line:
+You can also create tasks from the command line. This example uses a Git working directory with a commit on `main`.
 
 ```sh
 gg create feat/login         # worktree + background shell
@@ -61,13 +62,13 @@ The sidebar groups sessions under selectable folder sections. Worktrees (`⎇`) 
 | Next panel / cancel | Ctrl+W / Esc |
 | Quit this dashboard | Q |
 
-Select a folder and press T to open a persistent plain shell there, including inside Git. Section S/D confirm Stop all/Delete all within that section; confirmations freeze their targets and deletion checks every worktree before stopping processes. The footer shows Delete for an unprotected selected session. The actions menu also exposes T for another terminal, S to start/stop, D to delete and comma for settings. Use its shortcuts, arrows/Enter or the mouse. Search counts rows after the activity filter, before the text query; at 10 or fewer rows it clears and disappears. Search editing shows only Clear and Down-to-list; Down/Enter applies the query, and Esc clears it and selects the open terminal. In a narrow terminal, Ctrl+W opens the compact list after the last terminal pane.
+On a session, T adds a terminal to a running session or starts a stopped one. S starts or stops the session, D deletes an unprotected session, and comma opens settings. On a folder, S and D ask for confirmation to stop or delete sessions in that section. Search counts sessions after the activity filter. Down or Enter applies the query, and Esc clears it and selects the open terminal. In a narrow terminal, Ctrl+W opens the compact list after the last terminal pane.
 
 Dashboard starts with list focus and no terminal open. It creates no session and does not add the calling directory. Use **+ Add section**, browse folders or enter a path, then confirm with **Ctrl+S**. Relative paths use the calling directory; `~/` and paths with spaces are supported. Browsing and canceling create nothing. Adding an existing section selects it.
 
-Each section keeps its exact directory: `/project` and `/project/src` can coexist in one Git repository. T creates a persistent shell in that directory. N creates a worktree or ordinary session; creation from a session retains its section. `gg create` uses the section for its exact calling directory, adding it when needed. Existing sessions retain their root section, public IDs and worktree paths. X removes only an empty section, including no stopped records; files and workspace records remain.
+Each section keeps its exact directory. For example, `/project` and `/project/src` can have separate sections in one Git repository. T on a folder creates a persistent shell there. `gg create` adds a session to the section for its calling directory. X removes a section once it has no running or stopped sessions.
 
-Q, detach and connection loss close the dashboard while persistent terminals keep running. With no open terminal, the compact list stays accessible. Existing legacy dashboards and their owned temporary shells retain their cleanup behavior; new dashboards never create a temporary shell.
+Press Q in the list to close the dashboard. Its persistent terminals keep running, and you can reopen them with `gg dashboard`.
 
 ## Stop and remove
 
@@ -93,7 +94,6 @@ Grand Git focuses on a small session workflow and a shared dashboard across Git 
 
 - [Usage reference](docs/usage.md): global session IDs, settings, navigation, JSON and optional Codex hooks.
 - [Startup templates](docs/templates.md): shell, Codex, Claude and custom commands.
-- [Grand Git agent skill](docs/skills/grand-git/SKILL.md).
-- [Development instructions](AGENTS.md) and [current specifications](openspec/README.md).
+- The [source repository](https://github.com/chartyom/grand-git) includes the agent skill (`docs/skills/grand-git/SKILL.md`), development instructions (`AGENTS.md`) and specifications (`openspec/`).
 
 Development checks: `sh scripts/test.sh` and `sh scripts/check-specs.sh`. Tests use temporary repositories and isolated tmux servers; specification validation uses Node.js 22.12+ and pinned npx.
