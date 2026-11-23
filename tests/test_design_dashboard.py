@@ -58,7 +58,10 @@ class DesignDashboardTests(SessionFixture):
         self.press(b"+")
         wait_for(lambda: "Ctrl+S" in self.screen())
         self.press(b"\x13")
-        wait_for(lambda: "Ctrl+S" not in self.screen())
+        def selected_folder():
+            screen = self.screen()
+            return f"› {self.root.name}" in screen and "[T] Terminal" in screen and "Ctrl+S" not in screen
+        wait_for(selected_folder)
         self.press(b"t")
         wait_for(lambda: any(row["kind"] == "terminal" and row["path"] == str(self.root) for row in self.public_tasks()))
         time.sleep(.15)
@@ -147,6 +150,9 @@ class DesignDashboardTests(SessionFixture):
         self.press(b"r")
         wait_for(lambda: len([pane for pane in self.panes(task) if pane[2] != "1"]) == 2)
         second = next(pane[0] for pane in self.panes(task) if pane[2] != "1" and pane[0] != first)
+        # Wait for the dashboard to focus the right pane before typing into it.
+        right_width = int(self.tmux("display-message", "-p", "-t", second, "#{pane_width}").stdout)
+        wait_for(lambda: "▸" in self.screen().splitlines()[0][-right_width:])
         sync_terminal(second, "GG_COLOR_SPLIT_READY")
         paint(first, 22, "+ left")
         paint(second, 52, "- right")
@@ -290,7 +296,7 @@ class DesignDashboardTests(SessionFixture):
 
     def test_hover_preserves_terminal_focus_and_search_footer_is_exclusive(self):
         for i in range(10):
-            self.create(f"find-{i}")
+            self.create_stopped_worktree(f"find-{i}")
         self.launch()
         launcher = next(r for r in self.public_tasks() if r["kind"] == "terminal" and r["path"] == str(self.root))
         terminal = self.terminal(int(launcher["id"].split(":")[1]))

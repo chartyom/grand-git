@@ -5,6 +5,7 @@
 - The delegated usage-skill review checked the Git requirements for v1.0.1 and v1.0.0 against the worktree discovery implementation, updated the stable download link and pinned installer example, and confirmed the CLI and installer help. The legacy Git worktree regression test and all six installer fixture tests passed.
 - OpenSpec validation passed for all eight specifications. On Linux amd64, the build, Go tests, go vet and all 109 Python integration tests passed. GoReleaser v2.10.2 validated the configuration and built snapshot archives for all four targets.
 - Four Go fixture failures reproduced with a symlinked temporary directory. With canonical fixture roots, the full Go suite passed in that environment. Four Linux integration checks exercised the revised process fixtures. Six dashboard synchronization scenarios passed twice, including on a single CPU. Both zsh tests passed with an empty home directory and a writable completion directory.
+- Linux amd64 and arm64 CI passed the 109 integration tests after the focus checks selected the open terminal. On Linux, the revised shell checks passed with both sh and Bash. Ten search scenarios passed with stopped worktree fixtures, and a separate CLI test verified eleven simultaneously active worktrees with one terminal each. All nineteen continuous and design dashboard tests passed.
 
 ## Public release documentation for v1.0.0 (2026-11-23)
 

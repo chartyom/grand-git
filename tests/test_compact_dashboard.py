@@ -76,8 +76,9 @@ class CompactDashboardTests(SessionFixture):
         self.assertNotEqual(self.gg("start", "main", check=False).returncode, 0)
 
     def test_ten_eleven_and_active_filter_search_threshold(self):
-        for i in range(9):
-            self.create(f"task-{i}")
+        for i in range(8):
+            self.create_stopped_worktree(f"task-{i}")
+        self.create("task-8")
         proc, master = self.attach()
         launcher_id = int(self.launcher()["id"].split(":")[1])
         side = self.sidebar(launcher_id)
@@ -97,8 +98,7 @@ class CompactDashboardTests(SessionFixture):
         wait_for(lambda: "[/]" in self.capture(side))
         os.write(master, b"/last\r")
         wait_for(lambda: "/ last" in self.capture(side) or "/last" in self.capture(side))
-        for i in range(9):
-            self.gg("stop", f"task-{i}")
+        self.gg("stop", "task-8")
         os.write(master, b"a")
         wait_for(lambda: any(line.strip() == "Active" for line in self.capture(side).splitlines())
                  and "[/]" not in self.capture(side))

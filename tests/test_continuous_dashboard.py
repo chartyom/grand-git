@@ -34,15 +34,18 @@ class ContinuousDashboardTests(SessionFixture):
 
     def add_terminal(self, proc, master, cwd=None):
         wait_for(lambda: b"Add section" in self.outputs[proc.pid])
+        opened_at = len(self.outputs[proc.pid])
         os.write(master, b"+")
-        wait_for(lambda: b"Ctrl+S" in self.outputs[proc.pid])
+        wait_for(lambda: b"Ctrl+S" in self.outputs[proc.pid][opened_at:])
         if cwd is not None:
-            os.write(master, b"\x15" + str(cwd).encode())
+            os.write(master, b"\x15" + os.path.relpath(cwd, self.root).encode())
+        submitted_at = len(self.outputs[proc.pid])
         os.write(master, b"\x13")
         target = str(cwd or self.root)
         catalog = Path(self.env["XDG_STATE_HOME"]) / "grand-git/workspaces.json"
         wait_for(lambda: catalog.exists() and any(s["path"] == target for s in json.loads(catalog.read_text()).get("sections", [])))
-        time.sleep(.15)
+        selected = ("› " + Path(target).name).encode()
+        wait_for(lambda: selected in self.outputs[proc.pid][submitted_at:])
         os.write(master, b"t")
         wait_for(lambda: any(row["kind"] == "terminal" and row["path"] == target for row in self.public_tasks()))
         time.sleep(.15)
@@ -82,8 +85,8 @@ class ContinuousDashboardTests(SessionFixture):
         wait_for(lambda: b"foreign" in self.outputs[proc.pid][switched_at:])
         time.sleep(.2)
         before = len(self.outputs[proc.pid])
-        os.write(master, b"printf GG_CONTINUOUS_MARKER\r")
-        wait_for(lambda: b"GG_CONTINUOUS_MARKER$" in self.outputs[proc.pid][before:])
+        os.write(master, b"printf 'GG_%s\\n' CONTINUOUS_MARKER\r")
+        wait_for(lambda: b"GG_CONTINUOUS_MARKER" in self.outputs[proc.pid][before:])
         self.assertIsNone(proc.poll())
 
         os.write(master, b"\x17jj\r")

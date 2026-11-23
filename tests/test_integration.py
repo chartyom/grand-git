@@ -82,9 +82,9 @@ class SessionFixture(unittest.TestCase):
         shutil.rmtree(str(self.root) + "__sessions", ignore_errors=True)
         self.tmp.cleanup()
 
-    def run_cmd(self, *args, check=True, cwd=None, env=None, input=None):
+    def run_cmd(self, *args, check=True, cwd=None, env=None, input=None, timeout=20):
         p = subprocess.run(args, cwd=cwd or self.root, env=env or self.env,
-                           text=True, input=input, capture_output=True, timeout=20)
+                           text=True, input=input, capture_output=True, timeout=timeout)
         if check and p.returncode:
             self.fail(f"{args}: {p.stdout}\n{p.stderr}")
         return p
@@ -238,7 +238,11 @@ class SessionFixture(unittest.TestCase):
     def search_population(self):
         """Provide the eleven real rows needed by search-focused scenarios."""
         for index in range(max(0, 11 - len(self.public_tasks()))):
-            self.create(f"zz-search-{index}")
+            self.create_stopped_worktree(f"zz-search-{index}")
+
+    def create_stopped_worktree(self, branch):
+        self.create(branch)
+        self.gg("stop", branch)
 
     def active(self):
         clients = self.tmux("list-clients", "-F", "#{client_pid}|#{@gg_task}|#{@gg_sidebar}", check=False).stdout
@@ -271,6 +275,14 @@ class SessionFixture(unittest.TestCase):
 
 
 class SessionsTest(SessionFixture):
+    def test_eleven_worktrees_keep_their_terminals(self):
+        names = [f"parallel-{i}" for i in range(11)]
+        for name in names:
+            self.create(name, timeout=60)
+        rows = self.public_tasks()
+        self.assertCountEqual([row["branch"] for row in rows], names)
+        self.assertTrue(all(row["active"] and row["terminals"] == 1 for row in rows))
+
     def test_branch_identity_activity_and_named_paths(self):
         self.create("feat/feat1")
         row = next(t for t in self.public_tasks() if t["branch"] == "feat/feat1")
@@ -714,14 +726,15 @@ class SessionsTest(SessionFixture):
         os.write(master, b"\x17")
         wait_for(lambda: self.active() == "2|")
         # Escape and Ctrl+C go to the shell/agent outside command mode.
-        os.write(master, b"echo mode-off-ok\r")
-        wait_for(lambda: "mode-off-ok" in self.capture(self.tmux("display-message", "-p", "#{pane_id}").stdout.strip()))
+        terminal = self.tmux("display-message", "-p", "#{pane_id}").stdout.strip()
+        os.write(master, b"original_shell=$$; echo mode-off-ok\r")
+        wait_for(lambda: "mode-off-ok" in self.capture(terminal).splitlines())
         os.write(master, b"sleep 30\r")
         wait_for(lambda: self.tmux("display-message", "-p", "#{pane_current_command}").stdout.strip() == "sleep")
         os.write(master, b"\x03")
-        wait_for(lambda: self.tmux("display-message", "-p", "#{pane_current_command}").stdout.strip() == "sh")
-        os.write(master, b"echo after-interrupt\r")
-        wait_for(lambda: "after-interrupt" in self.capture(self.tmux("display-message", "-p", "#{pane_id}").stdout.strip()).splitlines())
+        wait_for(lambda: self.tmux("display-message", "-p", "-t", terminal, "#{pane_current_command}").stdout.strip() != "sleep")
+        os.write(master, b'test "$original_shell" = "$$" && echo after-interrupt\r')
+        wait_for(lambda: "after-interrupt" in self.capture(terminal).splitlines())
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
         os.kill(proc.pid, signal.SIGWINCH)
         wait_for(lambda: all(p[5] == "28" for p in self.panes(2) if p[2] == "1"))
@@ -981,8 +994,7 @@ exec {shlex.quote(git)} "$@"
         self.assertTrue(self.all_tasks()[0]["protected"])
         wait_for(lambda: self.active() == "0|")
         self.assertEqual(self.tmux("display-message", "-p", "-t", self.terminal(0), "#{pane_current_path}").stdout.strip(), str(self.root))
-        self.assertEqual(self.tmux("display-message", "-p", "-t", self.terminal(0), "#{pane_current_command}").stdout.strip(), "sh")
-        os.write(master, b"echo origin-shell-ok\r")
+        os.write(master, b"case $- in *i*) echo origin-shell-ok;; esac\r")
         wait_for(lambda: "origin-shell-ok" in self.capture(self.terminal(0)).splitlines())
         os.write(master, b"\x17")
         wait_for(lambda: "[?] Actions" in self.capture(self.sidebar(0)))
@@ -1079,8 +1091,8 @@ exec {shlex.quote(git)} "$@"
         state_file.write_text(json.dumps(state))
         proc, master = self.attach_session()
         wait_for(lambda: self.active() == "0|")
-        wait_for(lambda: self.tmux("display-message", "-p", "-t", root_terminal,
-                                  "#{pane_current_command}").stdout.strip() == "sh")
+        self.tmux("send-keys", "-t", root_terminal, "case $- in *i*) echo upgraded-shell-ok;; esac", "Enter")
+        wait_for(lambda: "upgraded-shell-ok" in self.capture(root_terminal).splitlines())
         after_pid = self.tmux("display-message", "-p", "-t", sidebar, "#{pane_pid}").stdout.strip()
         self.assertNotEqual(before_pid, after_pid)
         self.assertEqual(worker_pid, self.tmux("display-message", "-p", "-t", terminal, "#{pane_pid}").stdout.strip())
