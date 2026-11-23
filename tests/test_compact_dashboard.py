@@ -111,13 +111,14 @@ class CompactDashboardTests(SessionFixture):
         proc, master = self.attach()
         task_id = int(self.launcher()["id"].split(":")[1])
         side = self.sidebar(task_id)
+        wait_for(lambda: "▸ " in self.capture(side))
+        os.write(master, b"\x17")
+        wait_for(lambda: self.active() == f"{task_id}|1")
         wait_for(lambda: re.search(r"Open: +yes", self.capture(side)))
         self.assertIn("[?] Actions", self.capture(side))
         self.assertNotIn("GRAND GIT", self.capture(side))
         self.assertRegex(self.capture(side), r"Terminals: +1")
         self.assertRegex(self.capture(side), r"Open: +yes")
-        os.write(master, b"\x17")
-        wait_for(lambda: "▸ " in self.capture(side))
         screen = self.tmux("capture-pane", "-p", "-e", "-t", side).stdout
         for attributes in re.findall(r"\x1b\[([0-9;]*)m", screen):
             self.assertFalse(any(30 <= int(code) <= 49 or 90 <= int(code) <= 107 for code in attributes.split(";") if code), attributes)

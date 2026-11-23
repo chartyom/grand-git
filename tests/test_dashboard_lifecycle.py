@@ -67,7 +67,7 @@ class DashboardLifecycleTests(SessionFixture):
         proc, master = self.attach()
         launcher = self.launcher_id()
         terminal = self.terminal(launcher)
-        wait_for(lambda: any(line.split() == ["Open:", "yes"]
+        wait_for(lambda: any(line.split() == ["▸", "●", "dashboard"]
                              for line in self.capture(self.sidebar(launcher)).splitlines()))
         self.tmux("send-keys", "-t", terminal, "exit", "Enter")
         wait_for(lambda: not any(r["kind"] == "temporary" for r in self.public_tasks()))
