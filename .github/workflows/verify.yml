@@ -1,6 +1,8 @@
 name: Verify
 on:
   push:
+    branches: ['**']
+    tags-ignore: ['v*']
   pull_request:
   workflow_call:
 permissions:
@@ -10,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-15]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-15-intel, macos-26]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
