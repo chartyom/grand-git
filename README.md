@@ -14,7 +14,7 @@ Create a task, open a second worktree, and switch back with your edits and termi
 
 ## Install
 
-Grand Git ships binaries for Linux (including WSL2) and macOS on amd64 and arm64. Install **tmux 3.4+** for terminal sessions and **Git 2.31+** for Git projects with v1.0.1 (v1.0.0 requires Git 2.36+). The installer checks for both tools. Use a non-bare repository for Git tasks.
+Grand Git ships binaries for Linux (including WSL2) and macOS on amd64 and arm64. Install **tmux 3.4+** for terminal sessions and **Git 2.36+** for Git projects with v1.0.0. Source builds containing the worktree fix (`fcf9d51`) support Git 2.31+. The installer checks for both tools. Use a non-bare repository for Git tasks.
 
 Run these commands to install the latest stable release in `~/.local/bin`.
 
