@@ -16,7 +16,7 @@
     for (const child of children.flat(Infinity)) if (child !== null && child !== undefined && child !== false) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
     return node;
   };
-  const button = (id, label, fn, attrs = {}) => el('button', id, {type:'button', onclick: () => {fn(); render();}, ...attrs}, label);
+  const button = (id, label, fn, attrs = {}) => el('button', id, {type:'button', onclick: async () => {await fn(); render();}, ...attrs}, label);
   const shortcut = (prefix, key, label, fn, attrs = {}) => button(prefix, [el('kbd', `${prefix}-key`, {}, `[${key}]`), ' ', el('span', `${prefix}-label`, {}, label)], fn, attrs);
   const select = (id, value, entries, change, label) => {
     const n = el('select', id, {id:id.replace(/^gg-/, ''), 'aria-label':label, onchange: e => {change(e.target.value); render();}}, entries.map(([v, title]) => el('option', `${id}-option-${v}`, {value:v}, title)));
@@ -24,15 +24,19 @@
   };
   const compact = () => cols < 100 || lines < 16;
   const act = name => {G.action(name);};
+  const jobLabel = s => s.job.error ? t('Copy failed', 'Ошибка копирования') : t('Copying…', 'Копирование…');
   function actions(id = S().modal?.target || S().selected, contextual = false) {
     const state = S(), s = G.session(id), g = G.selectedGroup(id), list = [];
     if (g && !s) {
       list.push(['new', 'N', g.type === 'git' ? t('New worktree session', 'Новая worktree-сессия') : t('New session','Новая сессия')]);
       list.push(['terminal', 'T', t('New terminal here', 'Новый терминал в папке')]);
+      if (g.type === 'git' && !g.error) list.push(['relative-paths', 'R', t('Enable relative worktree paths', 'Включить относительные пути worktree')]);
       const sessions = state.sessions.filter(s => s.group === g.id);
       if (sessions.some(G.active)) list.push(['stop', 'S', t('Stop all sessions', 'Остановить все сессии')]);
       if (sessions.length) list.push(['delete', 'D', t('Delete all sessions', 'Удалить все сессии')]);
-      else if (!g.error) list.push(['remove-section', 'X', t('Remove section', 'Убрать раздел')]);
+      else if (!g.error && !state.jobs.some(j => j.group === g.id && !j.job.error)) list.push(['remove-section', 'X', t('Remove section', 'Убрать раздел')]);
+    } else if (s?.job) {
+      if (s.job.error) list.push(['open', 'Enter', t('Retry', 'Повторить')]);
     } else {
       if (s) list.push(['new', 'N', t('New session', 'Новая сессия')]);
       if (s) list.push(['open', 'Enter', t('Open', 'Открыть')], ['split', 'T', t('Add terminal', 'Ещё терминал')], ['stop', 'S', G.active(s) ? t('Stop', 'Остановить') : t('Start', 'Запустить')]);
@@ -49,6 +53,7 @@
     e.preventDefault();
     if (S().modal) return;
     const bounds = root.querySelector('[data-testid="gg-terminal"]').getBoundingClientRect();
+    if (G.session(id)?.job && !G.session(id).job.error) return;
     S().selected = id; S().focus = 'list'; G.action('actions', id);
     S().modal.anchor = {x:e.clientX-bounds.left, y:e.clientY-bounds.top};
     render();
@@ -74,7 +79,7 @@
       el('summary', 'gg-guide-summary', {}, t('Scenario guide & action result', 'Сценарий и результат действия')),
       el('div', 'gg-guide-content', {class:'guide-content'},
         el('section', 'gg-guide-scenario', {}, el('h2', 'gg-guide-scenario-heading', {}, t(scenario[1], scenario[2])), el('p', 'gg-guide-steps', {}, t(scenario[3], scenario[4])),
-          ['vanished','shell-exit','notices','agent'].includes(state.scenario) ? button('gg-simulate', t('Simulate event', 'Смоделировать событие'), G.simulate, {style:'margin-top:12px'}) : null),
+          ['vanished','shell-exit','notices','agent','copy','copy-error'].includes(state.scenario) ? button('gg-simulate', t('Simulate event', 'Смоделировать событие'), G.simulate, {style:'margin-top:12px'}) : null),
         el('section', 'gg-guide-result', {}, el('h2', 'gg-guide-result-heading', {}, t('Last action', 'Последнее действие')), el('p', 'gg-last-action', {'aria-live':'polite'}, G.text(state.last)), el('p', 'gg-guide-hint', {class:'hint'}, t('Click / Enter opens · Hover previews · Right-click / ? actions · Esc cancels', 'Клик / Enter открывает · Наведение показывает детали · Правая кнопка / ? действия · Esc отменяет')))));
     const footer = el('footer', 'gg-page-footer', {class:'page-footer'}, el('span', 'gg-demo-disclosure', {}, t('Browser-local simulation. Terminal output is illustrative; no shell commands run.', 'Модель в памяти браузера. Вывод терминалов демонстрационный; команды не исполняются.')), el('span', 'gg-cell-count', {}, `${cols} × ${lines} · ${t('character grid', 'сетка символов')}`));
     return el('main', 'gg-page', {class:'page'}, title, controls, stage, guide, footer, el('span', 'gg-measure', {class:'measure', 'aria-hidden':true}, '0000000000'));
@@ -89,9 +94,10 @@
       if (!compact() || state.focus !== 'list') content.push(panes());
     }
     const healthy = state.sessions.filter(s => !G.group(s.group).error);
+    const copying = state.jobs.filter(s => !s.job.error);
     const screen = el('section', 'gg-terminal', {class:`terminal${state.color ? '' : ' no-color'}`, style:`--cols:${cols};--rows:${lines};--sidebar:${Math.max(28, Math.min(56, Math.round(cols * .25)))}`, 'aria-label':t('Grand Git terminal interface', 'Терминальный интерфейс Grand Git')},
       el('div', 'gg-workspace', {class:'workspace'}, content),
-      el('div', 'gg-status', {class:'status'}, el('span', 'gg-status-project', {class:'status-left'}, G.group(state.context) ? `Grand Git · ${G.group(state.context).name}` : 'Grand Git'), el('span', 'gg-status-activity', {class:'status-right'}, `${t('Active', 'Активно')} ${healthy.filter(G.active).length}/${healthy.length} · Ctrl+W ${t('Next', 'Далее')}`)));
+      el('div', 'gg-status', {class:'status'}, el('span', 'gg-status-project', {class:'status-left'}, G.group(state.context) ? `Grand Git · ${G.group(state.context).name}` : 'Grand Git'), compact() && state.focus === 'terminal' && copying.length ? el('span', 'gg-status-copy', {}, el('span','gg-status-spinner',{class:'copy-spinner'},'◐'), ' ', copying.length === 1 ? jobLabel(copying[0]) : t('Worktrees', 'Worktree') + ' ' + copying.length) : null, el('span', 'gg-status-activity', {class:'status-right'}, `${t('Active', 'Активно')} ${healthy.filter(G.active).length}/${healthy.length} · Ctrl+W ${t('Next', 'Далее')}`)));
     if (state.modal && !state.detached) screen.append(dialog());
     return screen;
   }
@@ -121,9 +127,9 @@
           box.append(el('button', `${p}-row`, {id:`row-${G.key(s)}`, type:'button', role:'treeitem', 'aria-level':'2', tabindex:'-1', 'aria-selected':String(selectedRow), class:`session-row${selectedRow ? ' selected' : ''}`, title:s.path,
             onclick:() => {state.selected = G.key(s); state.searching = false; G.open(G.key(s)); render();}, onmouseenter:() => previewDetails(G.key(s)), oncontextmenu:e => contextMenu(e, G.key(s))},
             el('span', `${p}-open`, {class:'open-mark', 'aria-label':state.open === G.key(s) ? t('Open', 'Открыта') : t('Not open', 'Не открыта')}, state.open === G.key(s) ? '▸' : selectedRow ? '›' : ' '),
-            el('span', `${p}-activity`, {class:`activity${G.active(s) ? ' running' : ''}`, 'aria-label':G.active(s) ? t('Running', 'Работает') : t('Stopped', 'Остановлена')}, G.active(s) ? '●' : '○'),
+            s.job ? el('span', `${p}-activity`, {class:s.job.error ? 'activity' : 'activity copy-spinner', 'aria-label':jobLabel(s)}, s.job.error ? '!' : '◐') : el('span', `${p}-activity`, {class:`activity${G.active(s) ? ' running' : ''}`, 'aria-label':G.active(s) ? t('Running', 'Работает') : t('Stopped', 'Остановлена')}, G.active(s) ? '●' : '○'),
             el('span', `${p}-kind`, {class:'session-kind', 'aria-label':G.isWorktree(s) ? t('Worktree','Worktree-сессия') : t('Terminal','Терминал')}, G.isWorktree(s) ? '⎇' : '>_'),
-            el('span', `${p}-name`, {class:'session-name'}, s.name)));
+            el('span', `${p}-name`, {class:'session-name'}, s.name), s.job ? el('span', `${p}-phase`, {class:'copy-phase'}, jobLabel(s)) : null));
       }
       list.append(box);
     }
@@ -141,6 +147,8 @@
       foot.append(el('div', 'gg-footer-group-lifecycle', {class:'footer-line'},
         state.sessions.some(s => s.group === selectedGroup.id && G.active(s)) ? shortcut('gg-group-stop', 'S', t('Stop all', 'Остановить все'), () => act('stop')) : null,
         state.sessions.some(s => s.group === selectedGroup.id) ? shortcut('gg-delete', 'D', t('Delete all', 'Удалить все'), () => act('delete')) : null));
+    } else if (selected?.job) {
+      if (selected.job.error) foot.append(shortcut('gg-open','↵',t('Retry','Повторить'),() => act('open')));
     } else if (selected) {
       foot.append(el('div', 'gg-footer-primary', {class:'footer-line'}, shortcut('gg-open', '↵', t('Open', 'Открыть'), () => act('open'), {disabled:!selected}), shortcut('gg-new', 'N', t('New', 'Новая'), () => act('new'))));
       if (selected && !selected.protected) foot.append(el('div', 'gg-footer-delete', {class:'footer-line'}, shortcut('gg-delete', 'D', t('Delete', 'Удалить'), () => act('delete'))));
@@ -154,10 +162,12 @@
     const s = G.session(id), g = G.selectedGroup(id);
     if (!g) return el('section', 'gg-details', {class:'details'}, t('No selection', 'Ничего не выбрано'));
     let pairs;
-    if (s) {
+    if (s?.job) {
+      pairs = [['state', t('Status','Статус'), s.job.error ? G.text(s.job.error) : jobLabel(s)]];
+    } else if (s) {
       const statuses = {ready:t('ready','готов'), working:t('working','работает'), waiting:t('waiting for permission','ждёт разрешения'), done:t('turn completed','ход завершён'), interrupted:t('interrupted','прерван'), shell:t('shell','оболочка'), stopped:t('stopped','остановлен'), unknown:t('unknown','неизвестно')};
       const git = {clean:t('clean','чисто'), modified:t('modified','изменено'), unknown:t('unknown','неизвестно'), 'n/a':'—'};
-      pairs = [['terminals',t('Terminals','Терминалы'),s.panes.length],['agent',t('Agent','Агент'),statuses[G.active(s) ? s.agent : 'stopped']],['git','Git',git[s.git]],['open',t('Open','Открыта'),S().open === G.key(s) ? t('yes','да') : t('no','нет')]];
+      pairs = [['terminals',t('Terminals','Терминалы'),s.panes.length],['agent',t('Agent','Агент'),statuses[G.active(s) ? s.agent : 'stopped']],['git','Git',git[s.git]],...(G.isWorktree(s) ? [['branch',t('Branch','Ветка'),s.branch || t('detached','без ветки')]] : []),['open',t('Open','Открыта'),S().open === G.key(s) ? t('yes','да') : t('no','нет')]];
     } else {
       const sessions = S().sessions.filter(s => s.group === g.id);
       pairs = [['sessions',t('Sessions','Сессии'),sessions.length],['active',t('Running','Работают'),sessions.filter(G.active).length],['type',t('Folder','Папка'),g.type === 'git' ? 'Git' : t('directory','директория')]];
@@ -185,6 +195,7 @@
   function dialog() {
     const m = S().modal, type = m.type;
     const titles = {section:t('Add section','Добавить раздел'), create:t('Create session','Создать сессию'), confirm:m.bulk ? (m.action === 'delete' ? t('Delete all sessions','Удалить все сессии') : t('Stop all sessions','Остановить все сессии')) : (m.action === 'delete' ? t('Delete session','Удалить сессию') : t('Stop session','Остановить сессию')), split:t('Add terminal','Добавить терминал'), actions:t('Actions','Действия'), settings:t('Settings','Настройки')};
+    titles['relative-paths'] = t('Enable relative worktree paths', 'Включить относительные пути worktree');
     const d = el('section', 'gg-dialog', {class:`dialog${m.anchor ? ' context-menu' : ''}`, role:'dialog', 'aria-modal':'true', 'aria-labelledby':'dialog-title'}, el('h2', 'gg-dialog-title', {id:'dialog-title'}, titles[type]));
     const p = (id, text, cls = '') => el('p', `gg-dialog-${id}`, {class:cls}, text);
     const cancel = () => {S().modal = null;};
@@ -205,18 +216,24 @@
         const g = G.group(m.group);
         d.append(p('create-target', `${g.name} · ${m.path}`, 'muted'));
         if (m.kind === 'worktree') d.append(p('create-base', `${t('Base','Основа')}: ${m.base} HEAD`, 'muted'));
-        d.append(el('div','gg-create-field',{class:'field'},el('label','gg-create-name-label',{for:'create-name'},m.kind === 'worktree' ? t('Branch name','Имя ветки') : t('Name (optional)','Имя (необязательно)')),el('input','gg-create-name',{id:'create-name',value:m.name,autocomplete:'off',spellcheck:'false',oninput:e => {m.name = e.target.value;}})),
+        d.append(el('div','gg-create-field',{class:'field'},el('label','gg-create-name-label',{for:'create-name'},m.kind === 'worktree' ? t('Worktree name','Имя worktree') : t('Name (optional)','Имя (необязательно)')),el('input','gg-create-name',{id:'create-name',value:m.name,autocomplete:'off',spellcheck:'false',oninput:e => {m.name = e.target.value;}})),
+          ...(m.kind === 'worktree' ? [el('div','gg-create-branch-field',{class:'field'},el('label','gg-create-branch-label',{for:'create-branch'},t('Branch (optional)','Ветка (необязательно)')),el('input','gg-create-branch',{id:'create-branch',value:m.branch,autocomplete:'off',spellcheck:'false',oninput:e => {m.branch = e.target.value;}}))] : []),
           shortcut('gg-create-template','Tab',`${t('Template','Шаблон')}: ${m.template}`,() => {m.picking = true; m.choice = Math.max(0,G.templates.indexOf(m.template));}));
         if (m.error) d.append(p('error',G.text(m.error),'error'));
         d.append(el('div','gg-create-actions',{class:'dialog-actions'},shortcut('gg-create-submit','Enter',t('Create','Создать'),G.submitCreate),shortcut('gg-create-cancel','Esc',t('Cancel','Отмена'),cancel)));
       }
+    }
+    if (type === 'relative-paths') {
+      d.append(p('target', m.root), p('scope', t('Apply to all existing and future worktrees of this project.', 'Применить ко всем существующим и будущим worktree проекта.')),
+        p('compatibility', t('Confirm that Git on the host and every other client is 2.48 or newer.', 'Подтвердите, что на хосте и у всех остальных клиентов установлен Git 2.48 или новее.')),
+        el('div','gg-confirm-actions',{class:'dialog-actions'},shortcut('gg-confirm-yes','Y',t('Enable','Включить'),G.applyConfirmation),shortcut('gg-confirm-no','N / Esc',t('Cancel','Отмена'),cancel)));
     }
     if (type === 'confirm') {
       const g = G.group(m.group);
       d.append(p('target',m.name,'danger'),p('target-group',`${g.name} · ${g.path}`,'muted'),p('processes',t('Processes will stop.','Процессы будут остановлены.')));
       if (m.bulk) d.append(p('count', `${t('Sessions','Сессий')}: ${m.targets.length}`));
       if (m.action === 'delete' && m.bulk) d.append(p('files', t('Managed worktrees will be removed. Protected folders, ordinary directory files and Git branches will remain.', 'Worktree-сессии будут удалены. Защищённые папки, файлы обычных директорий и Git-ветки сохранятся.')));
-      if (m.action === 'delete' && !m.bulk) d.append(p('files',m.kind === 'worktree' ? t('Worktree will be removed. Git branch will remain.','Рабочая копия будет удалена. Git-ветка сохранится.') : t('The session record will be removed. Directory files will remain.','Запись сессии будет удалена. Файлы директории сохранятся.')));
+      if (m.action === 'delete' && !m.bulk) d.append(p('files',m.kind === 'worktree' ? t('Worktree will be removed. Git branches will remain.','Рабочая копия будет удалена. Git-ветки сохранятся.') : t('The session record will be removed. Directory files will remain.','Запись сессии будет удалена. Файлы директории сохранятся.')));
       d.append(el('div','gg-confirm-actions',{class:'dialog-actions'},shortcut('gg-confirm-yes','Y',m.action === 'delete' ? t('Delete','Удалить') : t('Stop','Остановить'),G.applyConfirmation,{class:'danger'}),shortcut('gg-confirm-no','N / Esc',t('Cancel','Отмена'),cancel)));
     }
     if (type === 'split') {
@@ -257,6 +274,8 @@
     const focused = document.activeElement?.dataset.testid;
     const range = document.activeElement?.tagName === 'INPUT' ? [document.activeElement.selectionStart,document.activeElement.selectionEnd] : null;
     const scrolls = new Map([...root.querySelectorAll('.pane-content,.sessions')].map(n => [n.dataset.testid,n.scrollTop]));
+    G.checkCreationFocus();
+    for (const s of S().jobs) if (s.job.due !== null && s.job.due <= Date.now()) G.finishCopy(s);
     if (S().notice?.until && S().notice.until <= Date.now()) S().notice = null;
     root.replaceChildren(scaffold());
     const old = `${cols}x${lines}`; measure();
@@ -299,7 +318,9 @@
       }
     }
     clearTimeout(timer);
-    if (S().notice?.until) timer = setTimeout(render, Math.max(0,S().notice.until-Date.now()));
+    const deadlines = S().jobs.map(s => s.job.due).filter(due => due !== null);
+    if (S().notice?.until) deadlines.push(S().notice.until);
+    if (deadlines.length) timer = setTimeout(render, Math.max(0, Math.min(...deadlines) - Date.now()));
   }
   document.addEventListener('keydown', e => {
     const state = S(), k = e.key.toLowerCase();
@@ -327,10 +348,13 @@
           if (k === 'enter') {e.preventDefault(); m.template = G.templates[m.choice]; m.picking = false;}
           if (['arrowup','k','arrowdown','j','enter'].includes(k)) {render(); return;}
         }
-        if (k === 'tab' && !e.shiftKey && !m.picking && e.target.dataset.testid === 'gg-create-name') {e.preventDefault(); m.picking = true; m.choice = Math.max(0,G.templates.indexOf(m.template)); render(); return;}
-        if (!m.picking && k === 'enter' && e.target.tagName === 'INPUT') {e.preventDefault(); G.submitCreate(); render(); return;}
+        if (!m.picking && m.kind === 'worktree' && ['arrowup','arrowdown'].includes(k) && e.target.tagName === 'INPUT') {
+          e.preventDefault(); root.querySelector(k === 'arrowup' ? '#create-name' : '#create-branch').focus(); return;
+        }
+        if (k === 'tab' && !e.shiftKey && !m.picking && e.target.tagName === 'INPUT') {e.preventDefault(); m.picking = true; m.choice = Math.max(0,G.templates.indexOf(m.template)); render(); return;}
+        if (!m.picking && k === 'enter' && e.target.tagName === 'INPUT') {e.preventDefault(); G.submitCreate().then(render); return;}
       }
-      if (m.type === 'confirm' && ['y','n'].includes(k)) {e.preventDefault(); if (k === 'y') G.applyConfirmation(); else state.modal = null; render(); return;}
+      if (['confirm','relative-paths'].includes(m.type) && ['y','n'].includes(k)) {e.preventDefault(); if (k === 'y') G.applyConfirmation(); else state.modal = null; render(); return;}
       if (m.type === 'split') {
         if (['arrowup','arrowleft','arrowdown','arrowright'].includes(k)) {e.preventDefault(); m.choice = ['arrowup','arrowleft'].includes(k) ? 0 : 1; render(); root.querySelector(`[data-testid="gg-split-${m.choice ? 'right' : 'below'}"]`).focus(); return;}
         if (['b','r','enter'].includes(k) && (k !== 'enter' || !e.target.closest('button'))) {e.preventDefault(); G.split(k === 'r' || (k === 'enter' && m.choice === 1) ? 'right' : 'below'); render(); return;}
@@ -362,7 +386,7 @@
     }
     if (k === 'contextmenu' || (e.shiftKey && k === 'f10')) {e.preventDefault(); act('actions'); render(); return;}
     if (['arrowup','k','arrowdown','j'].includes(k)) {e.preventDefault(); move(['arrowup','k'].includes(k) ? -1 : 1); render(); return;}
-    const commands = {'+':'add-section','x':'remove-section','n':'new','t':'split','s':'stop','d':'delete','a':'filter','/':'search','?':'actions',',':'settings','q':'quit','enter':'open'};
+    const commands = {'+':'add-section','x':'remove-section','n':'new','t':'split','r':'relative-paths','s':'stop','d':'delete','a':'filter','/':'search','?':'actions',',':'settings','q':'quit','enter':'open'};
     if (commands[k]) {
       if (k === 'enter' && e.target.tagName === 'BUTTON' && !e.target.matches('.session-row,.group-heading')) return;
       e.preventDefault(); act(commands[k]); render();

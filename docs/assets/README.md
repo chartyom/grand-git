@@ -2,7 +2,7 @@
 
 `gg-demo.gif` records the built `gg` CLI and dashboard in a real tmux terminal. `gg-demo.png` is its final frame. Both READMEs reference these files using relative paths, so the media stays with the repository on GitHub and in clones.
 
-The walkthrough creates `feat/login`, edits `app.py`, creates `fix/header` through the dashboard, and returns to the original terminal. The second worktree retains the original file while the first retains its uncommitted edit.
+The walkthrough creates `clone1`, opens it in the dashboard, creates the branch `feat/login` with Git and edits `app.py`. It then creates `clone2` through the dashboard, shows its detached HEAD and returns to the original terminal. The second worktree retains the original file while the first retains its uncommitted edit.
 
 ## Regenerate
 

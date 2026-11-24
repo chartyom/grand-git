@@ -105,10 +105,22 @@ Right-clicking a prototype session, terminal or folder SHALL open actions beside
 ### Requirement: Prototype group lifecycle actions
 Folder actions SHALL offer a plain shell in that directory, stopping running sessions, deleting all sessions and worktree creation only for Git folders. Bulk confirmations SHALL bind to fixed session identities, exclude later records and preflight surviving targets before stopping processes. Deletion SHALL preserve Git branches, ordinary directory files and protected worktree directories.
 
+#### Scenario: Relative worktree paths
+- **WHEN** the user selects R on a Git folder and confirms host compatibility
+- **THEN** the prototype models enabling relative links for that workspace
+
 #### Scenario: Group operation with changing records
 - **WHEN** a group deletion confirmation is open and a target disappears or another record is created
 - **THEN** confirmation affects only the surviving original targets in that group
-- **AND** a modified worktree prevents any stop or deletion
+- **AND** a modified worktree or unreferenced detached commit prevents any stop or deletion
+
+#### Scenario: Named worktree
+- **WHEN** a user creates a worktree in the prototype
+- **THEN** the tree starts at detached HEAD unless the optional branch is filled, and details show the checkout separately from its name
+
+#### Scenario: Worktree preparation in the prototype
+- **WHEN** a user submits a worktree and moves to another terminal during simulated copying
+- **THEN** the pending row animates, completion preserves that terminal and a failed copy can be retried with its original form values
 
 #### Scenario: Plain terminal in a Git folder
 - **WHEN** New terminal here is selected for a Git folder
@@ -139,7 +151,7 @@ Every DOM element, including metadata and dynamically created elements, SHALL ha
 - **THEN** every DOM element retains a unique nonempty data-testid and unchanged entities retain their selectors
 
 ### Requirement: Prototype folder browser and empty sections
-The prototype SHALL model + Add section using a fictional directory tree with path input, browsing, parent navigation and Ctrl+S confirmation. It SHALL model exact paths, duplicate selection, invalid paths and empty-section removal without reading the host filesystem. Root and nested Git sections SHALL share workspace identity and branch uniqueness while retaining independent session membership. Q and relaunch SHALL preserve persistent sessions without creating a temporary shell.
+The prototype SHALL model + Add section using a fictional directory tree with path input, browsing, parent navigation and Ctrl+S confirmation. It SHALL model exact paths, duplicate selection, invalid paths and empty-section removal without reading the host filesystem. Root and nested Git sections SHALL share workspace identity and worktree name uniqueness while retaining independent session membership. Q and relaunch SHALL preserve persistent sessions without creating a temporary shell.
 
 #### Scenario: Add a nested Git section
 - **WHEN** the user adds /workspace/atlas/src and creates a terminal there

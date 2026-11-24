@@ -28,7 +28,7 @@ type refreshMsg struct {
 	state   *State
 	snap    Snapshot
 	cfg     Settings
-	git     map[string]string
+	git     gitCache
 	err     error
 	started time.Time
 }
@@ -65,7 +65,7 @@ type sidebar struct {
 	state                                 *State
 	snap                                  Snapshot
 	cfg                                   Settings
-	git                                   map[string]string
+	git                                   gitCache
 	active, confirming                    bool
 	refreshing                            bool
 	confirmID                             int
@@ -95,6 +95,7 @@ type sidebar struct {
 	modalWorkspace, modalSection     int
 	screenWidth, screenHeight        int
 	pendingAction                    *popupAction
+	spinnerFrame                     int
 }
 
 func sidebarTick() tea.Cmd {
@@ -127,7 +128,7 @@ func (m sidebar) collectRefresh() tea.Cmd {
 			err = cfgErr
 		}
 		var state *State
-		var git map[string]string
+		var git gitCache
 		snap := Snapshot{}
 		if m.p.WorkspaceID > 0 {
 			snap = m.p.snapshot()
@@ -153,13 +154,19 @@ func resetViewport() tea.Cmd {
 }
 
 func (m sidebar) rows() []*Task {
+	candidates := m.candidates()
+	if m.query == "" {
+		return candidates
+	}
+	query := strings.ToLower(m.query)
 	rows := []*Task{}
-	for _, t := range m.candidates() {
-		text := t.label() + " " + m.displayName(t)
+	for _, t := range candidates {
+		branch := m.gitSnapshot(t).Branches[strconv.Itoa(t.ID)]
+		text := t.label() + " " + m.displayName(t) + " " + branch
 		if g := m.group(t.Group); g != nil {
 			text += " " + g.View.Name + " " + g.View.Path
 		}
-		if strings.Contains(strings.ToLower(text), strings.ToLower(m.query)) {
+		if strings.Contains(strings.ToLower(text), query) {
 			rows = append(rows, t)
 		}
 	}
@@ -167,7 +174,17 @@ func (m sidebar) rows() []*Task {
 }
 
 // Count before text filtering and viewport clipping, but after activity filtering.
-func (m sidebar) searchAvailable() bool { return len(m.candidates()) > 10 }
+func (m sidebar) searchAvailable() bool {
+	count := len(m.candidates())
+	if !m.onlyActive {
+		for _, g := range m.groups {
+			if g.Err == nil {
+				count += len(g.Jobs)
+			}
+		}
+	}
+	return count > 10
+}
 
 func (m *sidebar) clearSearch() {
 	m.query, m.searching = "", false
@@ -503,7 +520,16 @@ func (m sidebar) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.menuTarget != nil {
 				target = m.menuTarget
 			}
+			if target != nil && target.Folder && m.group(target.Group) == nil {
+				m.modal, m.menuAnchor = "", nil
+				m.message = m.cfg.text("Section no longer exists", "Раздел больше не существует")
+				return m, nil
+			}
 			items := m.shortcuts()
+			if len(items) == 0 {
+				m.modal, m.menuAnchor = "", nil
+				return m, nil
+			}
 			m.actionIndex = min(m.actionIndex, len(items)-1)
 			switch key {
 			case "esc", "?":
@@ -518,7 +544,7 @@ func (m sidebar) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "enter":
 				key = strings.ToLower(items[m.actionIndex].key)
-			case "n", "t", "s", "d", "/", "a", ",", "q", "+", "x":
+			case "n", "t", "s", "d", "r", "/", "a", ",", "q", "+", "x":
 				available := false
 				for _, item := range items {
 					available = available || strings.EqualFold(item.key, key)
@@ -654,7 +680,7 @@ func (m sidebar) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.move(-1)
 		case "+":
 			return m.perform(popupAction{Kind: "add-section"})
-		case "enter", "n", "t", "s", "d", "x":
+		case "enter", "n", "t", "s", "d", "r", "x":
 			return m.dispatch(key, target)
 		case "/":
 			if !m.searchAvailable() {
@@ -811,7 +837,12 @@ func (p *Project) createPopup(cwd string, client ...string) error {
 
 var errCancelled = errors.New("cancelled")
 
+type createValues struct {
+	name, branch, template string
+}
+
 type createForm struct {
+	field                 int
 	inputs                []textinput.Model
 	labels                []string
 	cfg                   Settings
@@ -823,6 +854,7 @@ type createForm struct {
 	picking, pickerOnly   bool
 	choice, width, height int
 	context, base         string
+	retryID               int
 }
 
 func newCreateForm(settings ...Settings) createForm {
@@ -837,13 +869,42 @@ func newCreateForm(settings ...Settings) createForm {
 	if name == "" {
 		name = "shell"
 	}
-	return createForm{inputs: []textinput.Model{input}, labels: []string{cfg.text("Branch name", "Имя ветки")}, cfg: cfg, template: name, width: 80, height: 24}
+	branch := textinput.New()
+	branch.CharLimit = input.CharLimit
+	branch.SetWidth(60)
+	return createForm{inputs: []textinput.Model{input, branch}, labels: []string{
+		cfg.text("Worktree name", "Имя worktree"), cfg.text("Branch (optional)", "Ветка (необязательно)"),
+	}, cfg: cfg, template: name, width: 80, height: 24}
+}
+
+func (m *createForm) setProject(p *Project) {
+	m.p = p
+	if p != nil && p.Directory {
+		m.inputs = m.inputs[:1]
+		m.labels = []string{m.cfg.text("Name (optional)", "Имя (необязательно)")}
+	}
+}
+
+func (m createForm) values() createValues {
+	v := createValues{name: strings.TrimSpace(m.inputs[0].Value()), template: m.template}
+	if len(m.inputs) > 1 {
+		v.branch = strings.TrimSpace(m.inputs[1].Value())
+	}
+	return v
+}
+
+func (m *createForm) focusField(field int) tea.Cmd {
+	m.inputs[m.field].Blur()
+	m.field = field
+	return m.inputs[field].Focus()
 }
 func (m createForm) Init() tea.Cmd { return m.inputs[0].Focus() }
 func (m createForm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width, m.height = size.Width, size.Height
-		m.inputs[0].SetWidth(max(4, min(60, size.Width-6)))
+		for i := range m.inputs {
+			m.inputs[i].SetWidth(max(4, min(60, size.Width-6)))
+		}
 	}
 	if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
 		_, hits := m.renderContent(m.width, m.height)
@@ -854,9 +915,6 @@ func (m createForm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(h.key, "template:") {
 				m.choice, _ = strconv.Atoi(strings.TrimPrefix(h.key, "template:"))
 				return m.Update(commandKey("enter"))
-			}
-			if h.key == "name" {
-				return m, m.inputs[0].Focus()
 			}
 			return m.Update(commandKey(h.key))
 		}
@@ -903,12 +961,19 @@ func (m createForm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelled = true
 			return m, tea.Quit
 		case "enter":
-			if strings.TrimSpace(m.inputs[0].Value()) == "" && (m.p == nil || !m.p.Directory) {
-				m.message = m.cfg.text("Branch name is required", "Имя ветки обязательно")
+			if len(m.inputs) > 1 && strings.TrimSpace(m.inputs[0].Value()) == "" {
+				m.message = m.cfg.text("Worktree name is required", "Имя worktree обязательно")
 				return m, nil
 			}
 			m.done = true
 			return m, tea.Quit
+		case "up", "down":
+			field := 0
+			if key.String() == "down" {
+				field = len(m.inputs) - 1
+			}
+			cmd := m.focusField(field)
+			return m, cmd
 		case "tab":
 			if err := m.openPicker(); err != nil {
 				m.message = err.Error()
@@ -917,7 +982,7 @@ func (m createForm) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
-	m.inputs[0], cmd = m.inputs[0].Update(msg)
+	m.inputs[m.field], cmd = m.inputs[m.field].Update(msg)
 	return m, cmd
 }
 func (m createForm) View() tea.View {
@@ -952,16 +1017,29 @@ func (m createForm) renderContent(width, height int) (string, []hit) {
 		if m.base != "" {
 			c.add(dim.Render(m.cfg.text("Base: ", "Основа: ") + m.base + " HEAD"))
 		}
-		c.add(m.labels[0])
-		focus = len(c.lines)
-		c.control("name", m.inputs[0].View())
+		for i, input := range m.inputs {
+			key := []string{"up", "down"}[i]
+			label := m.labels[i]
+			if i != m.field {
+				label = []string{"↑ ", "↓ "}[i] + label
+			}
+			c.control(key, label)
+			if i == m.field {
+				focus = len(c.lines)
+			}
+			c.control(key, input.View())
+		}
 		c.buttons(shortcut{"Tab", m.cfg.text("Template: ", "Шаблон: ") + m.template})
 		if m.message != "" {
 			for _, line := range strings.Split(ansi.Wrap(localizeError(m.message, m.cfg.Language), width, ""), "\n") {
 				c.add(danger.Render(line))
 			}
 		}
-		footer.buttons(shortcut{"Enter", m.cfg.text("Create", "Создать")}, shortcut{"Esc", m.cfg.text("Cancel", "Отмена")})
+		if m.done {
+			footer.add(dim.Render(m.cfg.text("Preparing…", "Подготовка…")))
+		} else {
+			footer.buttons(shortcut{"Enter", m.cfg.text("Create", "Создать")}, shortcut{"Esc", m.cfg.text("Cancel", "Отмена")})
+		}
 	}
 	return fitDialog(c, footer, max(1, height), focus)
 }
@@ -980,32 +1058,33 @@ func (m *createForm) openPicker() error {
 	return nil
 }
 
-func promptCreate(p *Project, cfg Settings, branch, name string, choose bool) (string, string, error) {
+func promptCreate(p *Project, cfg Settings, values createValues, choose bool) (createValues, error) {
 	m := newCreateForm(cfg)
-	m.p = p
+	m.setProject(p)
 	if p != nil && p.Directory {
-		m.labels[0] = cfg.text("Name (optional)", "Имя (необязательно)")
-		if branch == "" {
-			branch = filepath.Base(p.Root)
+		if values.name == "" {
+			values.name = filepath.Base(p.Root)
 		}
+	} else {
+		m.inputs[1].SetValue(values.branch)
 	}
-	m.inputs[0].SetValue(branch)
-	if name != "" {
-		m.template = name
+	m.inputs[0].SetValue(values.name)
+	if values.template != "" {
+		m.template = values.template
 	}
-	m.pickerOnly = choose && branch != ""
+	m.pickerOnly = choose && values.name != ""
 	if choose {
 		if err := m.openPicker(); err != nil {
-			return "", "", err
+			return createValues{}, err
 		}
 	}
 	result, err := tea.NewProgram(m).Run()
 	if err != nil {
-		return "", "", err
+		return createValues{}, err
 	}
 	m = result.(createForm)
 	if m.cancelled || !m.done {
-		return "", "", errCancelled
+		return createValues{}, errCancelled
 	}
-	return strings.TrimSpace(m.inputs[0].Value()), m.template, nil
+	return m.values(), nil
 }

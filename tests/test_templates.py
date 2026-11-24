@@ -39,7 +39,7 @@ class TemplateTests(SessionFixture):
         self.env["PATH"] = str(shim) + os.pathsep + self.env["PATH"]
         for name, expected in [("codex", "codex|"), ("claude", "claude|"), ("npm-dev", "npm|run dev")]:
             self.gg("create", "preset-" + name, "--template", name)
-            row = next(t for t in self.tasks() if t["branch"] == "preset-" + name)
+            row = next(t for t in self.tasks() if t["name"] == "preset-" + name)
             log = Path(row["path"]) / "preset.log"
             wait_for(lambda: log.exists())
             self.assertEqual(log.read_text(), expected)
@@ -48,14 +48,15 @@ class TemplateTests(SessionFixture):
     def test_plain_shell_and_extra_terminal_receive_their_own_literal_environment(self):
         self.env.update(GG_BRANCH="wrong", GG_WORKTREE="wrong", GG_PROJECT_ROOT="wrong")
         branch = "feat/#{session_name}"
-        self.create(branch)
+        self.create("clone1")
         row = self.tasks()[0]
         worktree = Path(row["path"])
         command = "printf '%s|%s|%s' \"$GG_BRANCH\" \"$GG_WORKTREE\" \"$GG_PROJECT_ROOT\""
         self.send(self.terminal(row["id"]), command + " > plain-env")
         wait_for(lambda: (worktree / "plain-env").exists())
-        expected = "|".join([branch, str(worktree), str(self.root)])
+        expected = "|".join(["", str(worktree), str(self.root)])
         self.assertEqual((worktree / "plain-env").read_text(), expected)
+        self.git("switch", "-c", branch, cwd=worktree)
         proc, master = self.attach_session(cwd=worktree)
         wait_for(lambda: self.active() == str(row["id"]) + "|")
         existing_panes = {p[0] for p in self.panes(row["id"])}
@@ -67,7 +68,7 @@ class TemplateTests(SessionFixture):
                     if p[2] != "1" and p[0] not in existing_panes)
         self.send(pane, command + " > extra-env")
         wait_for(lambda: (worktree / "extra-env").exists())
-        self.assertEqual((worktree / "extra-env").read_text(), expected)
+        self.assertEqual((worktree / "extra-env").read_text(), "|".join([branch, str(worktree), str(self.root)]))
 
     def test_templates_discovery_precedence_and_global_commands_outside_git(self):
         global_file = self.template_file("codex", ["printf global > startup"], local=False)
@@ -84,9 +85,9 @@ class TemplateTests(SessionFixture):
         wait_for(lambda: marker.exists())
         self.assertEqual(marker.read_text(), "local")
         self.assertEqual(row["template"], "codex")
-        self.gg("stop", row["branch"])
+        self.gg("stop", row["name"])
         local_file.unlink()
-        self.gg("start", row["branch"])
+        self.gg("start", row["name"])
         wait_for(lambda: marker.read_text() == "global")
         self.assertTrue(global_file.exists())
         self.assertFalse((self.root / ".gg/config.yaml").exists())
@@ -97,7 +98,7 @@ class TemplateTests(SessionFixture):
         self.gg("set", "default_template", "chosen", "--local")
         self.create("new")
         self.gg("create", "explicit", "--template", "shell")
-        rows = {t["branch"]: t for t in self.public_tasks()}
+        rows = {t["name"]: t for t in self.public_tasks()}
         self.assertNotIn("main", rows)
         self.assertEqual(rows["old"]["template"], "shell")
         self.assertEqual(rows["new"]["template"], "chosen")
@@ -115,20 +116,23 @@ class TemplateTests(SessionFixture):
         row = self.tasks()[0]
         trace = Path(row["path"]) / "trace"
         wait_for(lambda: trace.exists())
-        self.gg("start", row["branch"])
+        self.gg("start", row["name"])
         self.assertEqual(trace.read_text(), "one\n")
         self.gg("set", "default_template", "shell", "--local")
-        self.gg("stop", row["branch"])
-        self.template_file("versioned", ["printf 'two\\n' >> trace"])
-        self.gg("start", row["branch"])
+        self.gg("stop", row["name"])
+        self.git("switch", "-c", "feat/restarted", cwd=row["path"])
+        branch_file = Path(row["path"]) / "startup-branch"
+        self.template_file("versioned", ['printf %s "$GG_BRANCH" > startup-branch', "printf 'two\\n' >> trace"])
+        self.gg("start", row["name"])
         wait_for(lambda: trace.read_text() == "one\ntwo\n")
-        self.assertNotEqual(self.gg("start", row["branch"], "--template", "shell", check=False).returncode, 0)
+        self.assertEqual(branch_file.read_text(), "feat/restarted")
+        self.assertNotEqual(self.gg("start", row["name"], "--template", "shell", check=False).returncode, 0)
         self.assertEqual(self.tasks()[0]["template"], "versioned")
-        self.gg("stop", row["branch"])
+        self.gg("stop", row["name"])
         path.unlink()
-        self.assertNotEqual(self.gg("start", row["branch"], check=False).returncode, 0)
+        self.assertNotEqual(self.gg("start", row["name"], check=False).returncode, 0)
         self.assertFalse(self.tasks()[0]["active"])
-        self.gg("start", row["branch"], "--template", "shell")
+        self.gg("start", row["name"], "--template", "shell")
         self.assertEqual(self.tasks()[0]["template"], "shell")
         self.assertEqual(trace.read_text(), "one\ntwo\n")
 
@@ -146,7 +150,7 @@ class TemplateTests(SessionFixture):
         (one / ".gg").mkdir()
         (one / ".gg/config.yaml").write_text("default_template: missing\n")
         self.gg("create", "feat/two", cwd=one)
-        two = next(t for t in self.tasks() if t["branch"] == "feat/two")
+        two = next(t for t in self.tasks() if t["name"] == "feat/two")
         self.assertEqual(two["template"], "common")
         self.gg("set", "language", "ru", "--local", cwd=one)
         self.assertIn("language: ru", (self.root / ".gg/config.yaml").read_text())
@@ -177,7 +181,7 @@ class TemplateTests(SessionFixture):
                     "printf '%s|%s|%s|%s' \"$GG_FIXTURE_VALUE\" \"$GG_BRANCH\" \"$GG_WORKTREE\" \"$GG_PROJECT_ROOT\" > ../context",
                     "false", "touch ../must-not-run"]
         self.template_file("context", commands)
-        self.gg("create", branch, "--template", "context")
+        self.gg("create", "--branch", branch, "--template", "context")
         row = self.tasks()[0]
         worktree = Path(row["path"])
         wait_for(lambda: (worktree / "context").exists())
@@ -207,7 +211,7 @@ class TemplateTests(SessionFixture):
                 env["SHELL"] = executable
                 self.template_file("interrupt", ["sleep 30", "touch must-not-run"])
                 self.gg("create", "interrupt-" + name, "--template", "interrupt", env=env)
-                row = next(t for t in self.tasks() if t["branch"] == "interrupt-" + name)
+                row = next(t for t in self.tasks() if t["name"] == "interrupt-" + name)
                 pane = self.terminal(row["id"])
                 wait_for(lambda: self.tmux("display-message", "-p", "-t", pane, "#{pane_current_command}").stdout.strip() == "sleep")
                 self.tmux("send-keys", "-t", pane, "C-c")
@@ -215,7 +219,7 @@ class TemplateTests(SessionFixture):
                 self.send(pane, "printf ready > fallback-ready")
                 wait_for(lambda: (Path(row["path"]) / "fallback-ready").exists())
                 self.assertFalse((Path(row["path"]) / "must-not-run").exists())
-                self.gg("stop", row["branch"])
+                self.gg("stop", row["name"])
 
     def test_zsh_interactive_rc_is_loaded_before_template(self):
         executable = shutil.which("zsh")
@@ -235,7 +239,7 @@ class TemplateTests(SessionFixture):
         for name in ["missing", "../escape", "invalid"]:
             result = self.gg("create", "feat/invalid", "--template", name, check=False)
             self.assertNotEqual(result.returncode, 0)
-            self.assertFalse(Path(str(self.root) + "__sessions/feat/invalid").exists())
+            self.assertFalse(Path(str(self.root) + "__sessions/feat~invalid").exists())
             self.assertNotEqual(self.git("show-ref", "--verify", "refs/heads/feat/invalid", check=False).returncode, 0)
         result = self.gg("create", "no-tty", "--choose-template", check=False)
         self.assertNotEqual(result.returncode, 0)
@@ -247,7 +251,7 @@ class TemplateTests(SessionFixture):
         self.assertFalse((self.root / ".git/grand-git/state.json").exists())
 
     def test_commands_observe_committed_registry(self):
-        script = "import json,os;from pathlib import Path;s=json.loads((Path(os.environ['GG_PROJECT_ROOT'])/'.git/grand-git/state.json').read_text());assert any(t['branch']==os.environ['GG_BRANCH'] for t in s['tasks']);Path('registered').write_text('yes')"
+        script = "import json,os;from pathlib import Path;s=json.loads((Path(os.environ['GG_PROJECT_ROOT'])/'.git/grand-git/state.json').read_text());assert any(t['path']==os.environ['GG_WORKTREE'] for t in s['tasks']);Path('registered').write_text('yes')"
         self.template_file("registered", ["python3 -c " + shlex.quote(script)])
         self.gg("create", "feat/registered", "--template", "registered")
         row = self.tasks()[0]
@@ -261,15 +265,28 @@ class TemplateTests(SessionFixture):
         shim.mkdir()
         registry = self.root / ".git/grand-git/state.json"
         real = shutil.which("tmux")
-        script = "#!/usr/bin/python3\nimport pathlib,subprocess,sys\nargs=sys.argv[1:]\nresult=subprocess.run([" + repr(real) + "]+args)\nif len(args)>3 and args[2]=='select-pane' and '-T' not in args:\n    pathlib.Path(" + repr(str(registry)) + ").mkdir(exist_ok=True)\nsys.exit(result.returncode)\n"
+        script = f"""#!/usr/bin/python3
+from pathlib import Path
+import subprocess
+import sys
+
+args = sys.argv[1:]
+result = subprocess.run([{real!r}] + args)
+if len(args) > 3 and args[2] == "select-pane" and "-T" not in args:
+    registry = Path({str(registry)!r})
+    if registry.is_file():
+        registry.rename(registry.with_suffix(".before-commit"))
+    registry.mkdir(exist_ok=True)
+sys.exit(result.returncode)
+"""
         (shim / "tmux").write_text(script)
         (shim / "tmux").chmod(0o700)
         env = dict(self.env, PATH=str(shim) + os.pathsep + self.env["PATH"])
-        result = self.gg("create", "feat/fail-commit", "--template", "guarded", env=env, check=False)
+        result = self.gg("create", "--branch", "feat/fail-commit", "--template", "guarded", env=env, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertTrue(registry.is_dir(), result.stderr)
         self.assertFalse(marker.exists())
-        self.assertFalse(Path(str(self.root) + "__sessions/feat/fail-commit").exists())
+        self.assertFalse(Path(str(self.root) + "__sessions/feat~fail-commit").exists())
         self.assertNotEqual(self.git("show-ref", "--verify", "refs/heads/feat/fail-commit", check=False).returncode, 0)
 
     def test_cli_picker_selection_and_cancellation(self):

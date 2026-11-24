@@ -14,7 +14,7 @@ import (
 	"golang.org/x/term"
 )
 
-const uiRevision = "grand-git-v11"
+const uiRevision = "grand-git-v12"
 
 type Pane struct {
 	Generation, WindowName, AppliedLabel                string
@@ -506,7 +506,11 @@ func (p *Project) ensureTask(t *Task, temporary ...bool) (err error) {
 			return err
 		}
 	}
-	invocation, err := p.prepareLaunch(t)
+	branch, err := t.currentBranch()
+	if err != nil {
+		return err
+	}
+	invocation, err := p.prepareLaunch(t, branch)
 	if err != nil {
 		return err
 	}
@@ -521,13 +525,13 @@ func (p *Project) ensureTask(t *Task, temporary ...bool) (err error) {
 		if _, err = p.tmux("set-window-option", "-t", terms[0].Window, "@gg_temporary", generation); err != nil {
 			return err
 		}
-		args := append([]string{"respawn-pane", "-k", "-t", terms[0].ID, "-c", t.Path}, p.terminalEnv(t)...)
+		args := append([]string{"respawn-pane", "-k", "-t", terms[0].ID, "-c", t.Path}, p.terminalEnv(t, branch)...)
 		if _, err = p.tmux(append(args, invocation)...); err != nil {
 			return err
 		}
 		return p.labelPane(terms[0].ID, oneLine(t.label()))
 	}
-	args := append([]string{"new-window", "-d", "-t", "dashboard:", "-n", oneLine(t.label()), "-c", t.Path, "-P", "-F", "#{window_id}"}, p.terminalEnv(t)...)
+	args := append([]string{"new-window", "-d", "-t", "dashboard:", "-n", oneLine(t.label()), "-c", t.Path, "-P", "-F", "#{window_id}"}, p.terminalEnv(t, branch)...)
 	window, err := p.tmux(append(args, invocation)...)
 	if err != nil {
 		return err
@@ -767,12 +771,16 @@ func (p *Project) addTerminal(id int, orientation string) error {
 			}
 			return p.ensureTask(t)
 		}
+		branch, err := t.currentBranch()
+		if err != nil {
+			return err
+		}
 		target := p.returnPane(id)
 		flag := "-v"
 		if orientation == "right" {
 			flag = "-h"
 		}
-		args := append([]string{"split-window", flag, "-d", "-t", target, "-c", t.Path, "-P", "-F", "#{pane_id}"}, p.terminalEnv(t)...)
+		args := append([]string{"split-window", flag, "-d", "-t", target, "-c", t.Path, "-P", "-F", "#{pane_id}"}, p.terminalEnv(t, branch)...)
 		pane, err := p.tmux(append(args, quote(shell()))...)
 		if err != nil {
 			return err

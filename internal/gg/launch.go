@@ -19,15 +19,15 @@ type terminalLaunch struct {
 	Commands                                []string
 }
 
-func (p *Project) terminalEnv(t *Task) []string {
-	return []string{"-e", "GG_BRANCH=" + t.Branch, "-e", "GG_WORKTREE=" + t.Path, "-e", "GG_PROJECT_ROOT=" + p.Root}
+func (p *Project) terminalEnv(t *Task, branch string) []string {
+	return []string{"-e", "GG_BRANCH=" + branch, "-e", "GG_WORKTREE=" + t.Path, "-e", "GG_PROJECT_ROOT=" + p.Root}
 }
 
 func (p *Project) launchPath(token string) string {
 	return filepath.Join(p.Dir, "launches", token+".json")
 }
 
-func (p *Project) prepareLaunch(t *Task) (string, error) {
+func (p *Project) prepareLaunch(t *Task, branch string) (string, error) {
 	tpl, err := p.resolveTemplate(t.templateName())
 	if err != nil {
 		return "", err
@@ -53,7 +53,7 @@ func (p *Project) prepareLaunch(t *Task) (string, error) {
 	if err = os.MkdirAll(filepath.Join(p.Dir, "launches"), 0700); err != nil {
 		return "", err
 	}
-	payload := terminalLaunch{Task: t.ID, Branch: t.Branch, Path: t.Path, Template: tpl.Name, Shell: shell(), Language: cfg.Language, Commands: tpl.Commands}
+	payload := terminalLaunch{Task: t.ID, Branch: branch, Path: t.Path, Template: tpl.Name, Shell: shell(), Language: cfg.Language, Commands: tpl.Commands}
 	if err = atomicJSON(p.launchPath(t.LaunchToken), payload); err != nil {
 		return "", err
 	}
@@ -87,7 +87,7 @@ func (p *Project) runTerminal(id int, token string) error {
 		if err = json.Unmarshal(b, &launch); err != nil {
 			return err
 		}
-		if launch.Task != id || launch.Path != t.Path || launch.Branch != t.Branch || launch.Template != t.templateName() {
+		if launch.Task != id || launch.Path != t.Path || launch.Template != t.templateName() {
 			return errors.New("terminal launch no longer matches the session")
 		}
 		return p.validateWorktree(t)

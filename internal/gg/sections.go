@@ -176,13 +176,35 @@ func removeSection(id int) error {
 					return errors.New("section is not empty")
 				}
 			}
+			jobs, err := p.readJobs()
+			if err != nil {
+				return err
+			}
+			for _, j := range jobs {
+				if (j.SectionID == id || j.SectionID == 0 && j.CWD == s.Path) && j.Phase != "failed" {
+					if err := p.recoverAbandonedJob(j.ID); err != nil {
+						return err
+					}
+					return errors.New("section is not empty")
+				}
+			}
 			for i, old := range c.Sections {
 				if old.ID == id {
 					c.Sections = append(c.Sections[:i], c.Sections[i+1:]...)
 					break
 				}
 			}
-			return saveCatalog(c)
+			if err := saveCatalog(c); err != nil {
+				return err
+			}
+			for _, j := range jobs {
+				if j.SectionID == id {
+					if err := p.removeJob(j.ID); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		}, false)
 	})
 }
@@ -237,7 +259,7 @@ func collectSections(git bool) ([]sessionGroup, error) {
 	if err != nil {
 		return nil, err
 	}
-	groups := collectWorkspaceGroups(c.Workspaces, git)
+	groups := collectWorkspaceGroups(c.Workspaces, git, true)
 	byWorkspace := make(map[int]sessionGroup, len(groups))
 	rootSections := make(map[int]bool)
 	for _, g := range groups {
@@ -280,6 +302,8 @@ func collectSections(git bool) ([]sessionGroup, error) {
 		root := g.View.Path
 		g.Workspace, g.Section = section.Workspace, section.ID
 		g.View.ID, g.View.Name, g.View.Path = section.ID, filepath.Base(section.Path), section.Path
+		jobs := g.Jobs
+		g.Jobs = nil
 		if g.State != nil {
 			state := *g.State
 			state.Tasks = []*Task{}
@@ -291,6 +315,13 @@ func collectSections(git bool) ([]sessionGroup, error) {
 				}
 			}
 			g.State = &state
+			for _, job := range jobs {
+				if job.SectionID == section.ID {
+					if _, err := taskByID(&state, job.ID); err != nil {
+						g.Jobs = append(g.Jobs, job)
+					}
+				}
+			}
 		}
 		if g.Err == nil {
 			path, err := canonicalDir(section.Path)

@@ -85,7 +85,7 @@ Commands run in one interactive `sh`, `bash` or `zsh` after normal shell initial
 
 Each entry is a shell command or block with its own final exit status. Execution stops at the first nonzero entry. Within multiline blocks, use `&&` or explicit error checks where needed. Put long-running commands last because the next entry starts only after the previous one exits. For a second terminal, focus the dashboard list, select the running session and press T to choose a pane position.
 
-Grand Git sets `GG_BRANCH` to the session's branch, `GG_WORKTREE` to the session directory and `GG_PROJECT_ROOT` to the primary worktree or ordinary workspace directory. Plain terminal sessions have an empty `GG_BRANCH`.
+Grand Git sets `GG_BRANCH` to the branch checked out when the terminal starts, `GG_WORKTREE` to the session directory and `GG_PROJECT_ROOT` to the primary worktree or ordinary workspace directory. Detached worktrees and plain terminal sessions have an empty `GG_BRANCH`.
 
 ```yaml
 commands:
@@ -110,7 +110,7 @@ gg start feat/backend --template shell   # save another template and start
 
 `start --template` is rejected for active sessions; plain `start` creates no duplicates. If a template is removed or malformed, startup reports the reason: fix the file or explicitly choose `shell`.
 
-Creation without `--choose-template` asks no template questions. In the dashboard form, Tab opens the list, arrows select, Enter confirms and Esc restores the previous selection. In an explicit CLI `--choose-template` picker with a branch supplied, Enter creates the session and Esc cancels creation. The flag requires an interactive terminal and conflicts with `--template`.
+Creation without `--choose-template` asks no template questions. In the dashboard form, Tab opens the list, arrows select, Enter confirms and Esc restores the previous selection. In an explicit CLI `--choose-template` picker with a worktree name supplied, Enter creates the session and Esc cancels creation. The flag requires an interactive terminal and conflicts with `--template`.
 
 Commands start after the session is saved in the registry. `create` returns as soon as the terminal is ready. Open the session in `gg dashboard` to see the application's output. On normal completion, failure or Ctrl+C, the terminal displays the startup exit status and returns to an interactive shell. Session files remain available.
 

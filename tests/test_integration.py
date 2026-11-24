@@ -129,7 +129,7 @@ class SessionFixture(unittest.TestCase):
 
     def delete(self, task_id, *args, **kwargs):
         task = next(t for t in self.all_tasks() if t["id"] == task_id)
-        return self.gg("delete", task["branch"], *args, **kwargs)
+        return self.gg("delete", task["name"], *args, **kwargs)
 
     def panes(self, task=1):
         data = self.tmux("list-panes", "-a", "-F",
@@ -255,9 +255,9 @@ class SessionFixture(unittest.TestCase):
         for index in range(max(0, 11 - len(self.public_tasks()))):
             self.create_stopped_worktree(f"zz-search-{index}")
 
-    def create_stopped_worktree(self, branch):
-        self.create(branch)
-        self.gg("stop", branch)
+    def create_stopped_worktree(self, name):
+        self.create(name)
+        self.gg("stop", name)
 
     def active(self):
         clients = self.tmux("list-clients", "-F", "#{client_pid}|#{@gg_task}|#{@gg_sidebar}", check=False).stdout
@@ -295,13 +295,17 @@ class SessionsTest(SessionFixture):
         for name in names:
             self.create(name, timeout=60)
         rows = self.public_tasks()
-        self.assertCountEqual([row["branch"] for row in rows], names)
+        self.assertCountEqual([row["name"] for row in rows], names)
+        self.assertTrue(all(row["branch"] == "" for row in rows))
         self.assertTrue(all(row["active"] and row["terminals"] == 1 for row in rows))
 
     def test_branch_identity_activity_and_named_paths(self):
-        self.create("feat/feat1")
+        self.gg("create", "--branch", "feat/feat1")
         row = next(t for t in self.public_tasks() if t["branch"] == "feat/feat1")
-        self.assertEqual(row["path"], str(Path(str(self.root) + "__sessions") / "feat/feat1"))
+        sessions_dir = Path(str(self.root) + "__sessions")
+        self.assertEqual(Path(row["path"]), sessions_dir / "feat~feat1")
+        self.assertFalse((sessions_dir / "feat").exists())
+        self.assertEqual(self.git("branch", "--show-current", cwd=row["path"]).stdout.strip(), "feat/feat1")
         self.assertTrue(row["active"])
         self.assertEqual(row["terminals"], 1)
         self.assertRegex(row["id"], r"^\d+:\d+$")
@@ -321,29 +325,68 @@ class SessionsTest(SessionFixture):
         self.gg("stop", "--all", "--yes")
         self.assertFalse(any(t["active"] for t in self.public_tasks()))
         self.assertEqual(len(self.public_tasks()), 1)
-        # A branch literally named "1" is a branch, never an internal ID.
+        # A numeric worktree name resolves by name within the current project.
         self.create("1")
         self.gg("delete", "1", "--yes")
         self.assertEqual([t["branch"] for t in self.tasks()], ["feat/feat1"])
 
+    def test_flat_paths_keep_distinct_branches_and_support_long_names(self):
+        long_branch = "component/" * 30 + "data"
+        expected_names = {
+            "data": "data",
+            "feat/data": "feat~data",
+            "fix/data": "fix~data",
+            long_branch: "~" + hashlib.sha256(long_branch.encode()).hexdigest(),
+        }
+        sessions_dir = Path(str(self.root) + "__sessions")
+        for branch, name in expected_names.items():
+            self.gg("create", "--branch", branch)
+            self.assertEqual(self.git("branch", "--show-current", cwd=sessions_dir / name).stdout.strip(), branch)
+        self.assertEqual({p.name for p in sessions_dir.iterdir()}, set(expected_names.values()))
+        self.assertEqual({t["branch"]: Path(t["path"]).name for t in self.tasks()}, expected_names)
+
+    def test_previously_nested_path_can_start_and_delete(self):
+        branch = "feat/legacy"
+        self.gg("create", "--branch", branch)
+        self.gg("stop", branch)
+        old_path = Path(str(self.root) + "__sessions") / branch
+        old_path.parent.mkdir()
+        self.git("worktree", "move", self.tasks()[0]["path"], str(old_path))
+        registry = self.root / ".git/grand-git/state.json"
+        state = json.loads(registry.read_text())
+        state["tasks"][0]["path"] = str(old_path)
+        registry.write_text(json.dumps(state))
+        self.gg("start", branch)
+        self.assertEqual(self.tasks()[0]["path"], str(old_path))
+        (old_path / "changes").write_text("pending")
+        self.assertNotEqual(self.gg("delete", branch, "--yes", check=False).returncode, 0)
+        self.assertEqual((old_path / "changes").read_text(), "pending")
+        self.gg("delete", branch, "--force", "--yes")
+        self.assertFalse(old_path.exists())
+        self.git("show-ref", "--verify", "refs/heads/" + branch)
+
     def test_named_path_rejects_symlink_parents_and_occupied_directories(self):
         base = Path(str(self.root) + "__sessions")
-        base.mkdir()
         outside = Path(self.tmp.name) / "outside"
         outside.mkdir()
-        (base / "feat").symlink_to(outside, target_is_directory=True)
+        base.symlink_to(outside, target_is_directory=True)
         self.assertNotEqual(self.create("feat/escape", check=False).returncode, 0)
-        self.assertFalse((outside / "escape").exists())
+        self.assertEqual(list(outside.iterdir()), [])
         self.assertEqual(self.tasks(), [])
-        (base / "feat").unlink()
+        base.unlink()
+        base.mkdir()
+        (base / "feat~escape").symlink_to(outside, target_is_directory=True)
+        self.assertNotEqual(self.create("feat/escape", check=False).returncode, 0)
+        self.assertTrue((base / "feat~escape").is_symlink())
+        self.assertEqual(list(outside.iterdir()), [])
         (base / "occupied").mkdir()
         (base / "occupied/keep").write_text("keep")
         self.assertNotEqual(self.create("occupied", check=False).returncode, 0)
         self.assertEqual((base / "occupied/keep").read_text(), "keep")
 
     def test_bulk_delete_preflight_preserves_running_tasks_and_protected_origin(self):
-        self.create("first")
-        self.create("second")
+        self.gg("create", "--branch", "first")
+        self.gg("create", "--branch", "second")
         self.attach_session()
         first, second = self.tasks()
         (Path(second["path"]) / "keep").write_text("unsaved")
@@ -634,21 +677,23 @@ class SessionsTest(SessionFixture):
                  env=dict(self.env, GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@localhost"))
         release = self.git("rev-parse", "HEAD").stdout.strip()
         self.git("checkout", "main")
-        self.gg("create", "task/main", "--base", "main")
-        self.gg("create", "task/release", "--base", "release/demo")
+        self.gg("create", "--branch", "task/main", "--base", "main")
+        self.gg("create", "--branch", "task/release", "--base", "release/demo")
         tasks = self.tasks()
         self.assertEqual([t["id"] for t in tasks], [1, 2])
         self.assertEqual(tasks[1]["base"], release)
         self.assertEqual((Path(tasks[1]["path"]) / "README").read_text(), "release\n")
         self.assertEqual(len(self.tasks(cwd=tasks[0]["path"])), 2)
-        self.assertNotEqual(self.gg("create", "main", check=False).returncode, 0)
+        self.assertNotEqual(self.gg("create", "--branch", "main", check=False).returncode, 0)
         self.assertEqual(len(self.tasks()), 2)
         self.delete(1, "--yes")
         self.assertEqual(self.git("show-ref", "--verify", "refs/heads/task/main").returncode, 0)
-        self.create("task/main")
-        self.assertEqual(self.tasks()[-1]["id"], 3)
+        self.assertNotEqual(self.gg("create", "clone", "--branch", "task/main", "--base", "release/demo", check=False).returncode, 0)
+        self.gg("create", "clone", "--branch", "task/main")
+        attached = self.tasks()[-1]
+        self.assertEqual((attached["id"], attached["name"], attached["branch"]), (3, "clone", "task/main"))
         self.delete(2, "--yes")
-        self.create("task/release")
+        self.gg("create", "--branch", "task/release")
         self.assertEqual(self.tasks()[-1]["base"], release)
 
     def test_concurrent_creation_allocates_unique_ids(self):
@@ -658,8 +703,43 @@ class SessionsTest(SessionFixture):
                 f.result()
         self.assertEqual([t["id"] for t in self.tasks()], [1, 2, 3, 4])
 
+    def test_listing_during_worktree_removal_keeps_healthy_sessions(self):
+        self.create("first")
+        self.create("second")
+        tmp = Path(self.tmp.name)
+        shim = tmp / "git"
+        git = shlex.quote(shutil.which("git"))
+        removed, release = tmp / "removed", tmp / "release"
+        shim.write_text(f'''#!/bin/sh
+if test "$1" = worktree && test "$2" = remove; then
+    {git} "$@" || exit $?
+    touch {shlex.quote(str(removed))}
+    while ! test -f {shlex.quote(str(release))}; do sleep 0.02; done
+    exit 0
+fi
+exec {git} "$@"
+''')
+        shim.chmod(0o755)
+        env = dict(self.env, PATH=str(tmp) + os.pathsep + self.env["PATH"])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            deletion = pool.submit(self.gg, "delete", "first", "--yes", env=env)
+            try:
+                wait_for(removed.exists)
+                listing = pool.submit(self.gg, "list", "--json")
+                # Keep the path absent and its registry record committed while list starts.
+                concurrent.futures.wait([listing], timeout=0.5)
+            finally:
+                release.touch()
+            deletion.result()
+            rows = json.loads(listing.result().stdout)
+        self.assertEqual([row["name"] for row in rows], ["second"])
+        self.git("worktree", "remove", "--", rows[0]["path"])
+        result = self.gg("list", "--json", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(rows[0]["path"], result.stderr)
+
     def test_deletion_protects_user_files_and_keeps_branch(self):
-        self.create()
+        self.gg("create", "--branch", "task")
         path = Path(self.tasks()[0]["path"])
         (path / "untracked.txt").write_text("do not lose")
         self.assertNotEqual(self.delete(1, "--yes", check=False).returncode, 0)
@@ -727,7 +807,7 @@ class SessionsTest(SessionFixture):
         hook = self.root / ".git/hooks/post-checkout"
         hook.write_text("#!/bin/sh\necho checkout-hook-failed >&2\nexit 1\n")
         hook.chmod(0o755)
-        result = self.create("failed-hook", check=False)
+        result = self.gg("create", "--branch", "failed-hook", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("checkout-hook-failed", result.stderr)
         self.assertEqual(self.tasks(), [])
@@ -760,9 +840,9 @@ class SessionsTest(SessionFixture):
         self.seed_legacy_source()
         self.create("second")
         previous = json.loads(output.read_text())
-        self.assertCountEqual([(r["kind"], r["branch"], r["active"]) for r in previous],
+        self.assertCountEqual([(r["kind"], r["name"], r["active"]) for r in previous],
                               [("source", "main", True), ("worktree", "feat", True)])
-        self.assertCountEqual([r["branch"] for r in self.tasks()], ["feat", "second"])
+        self.assertCountEqual([r["name"] for r in self.tasks()], ["feat", "second"])
 
     def test_dashboard_modal_keys_resize_and_background_survival(self):
         self.create("first")
@@ -828,15 +908,16 @@ class SessionsTest(SessionFixture):
 
     def test_interactive_create_prompts_and_cancellation(self):
         proc, master = self.start_client([str(BIN), "create"])
-        wait_for(lambda: "Branch name".encode() in self.outputs[proc.pid])
+        wait_for(lambda: b"Worktree name" in self.outputs[proc.pid])
         os.write(master, b"interactive\r")
         wait_for(lambda: proc.poll() is not None)
         self.assertEqual(proc.returncode, 0)
-        self.assertEqual(self.tasks()[0]["branch"], "interactive")
+        self.assertEqual(self.tasks()[0]["name"], "interactive")
+        self.assertEqual(self.tasks()[0]["branch"], "")
         self.assertNotIn("description", self.tasks()[0])
         self.assertNotIn("Description".encode(), self.outputs[proc.pid])
         proc, master = self.start_client([str(BIN), "create"])
-        wait_for(lambda: "Branch name".encode() in self.outputs[proc.pid])
+        wait_for(lambda: b"Worktree name" in self.outputs[proc.pid])
         os.write(master, b"\x1b")
         wait_for(lambda: proc.poll() is not None)
         self.assertEqual(len(self.tasks()), 1)
@@ -844,9 +925,10 @@ class SessionsTest(SessionFixture):
     def test_dashboard_create_and_delete_from_menu(self):
         proc, master = self.attach_session()
         os.write(master, b"\x17n")
-        wait_for(lambda: "Branch name".encode() in self.outputs[proc.pid])
-        os.write(master, b"from-menu\r")
+        wait_for(lambda: b"Worktree name" in self.outputs[proc.pid])
+        os.write(master, b"from-menu\x1b[Bfix/menu\r")
         wait_for(lambda: len(self.tasks()) == 1)
+        self.assertEqual((self.tasks()[0]["name"], self.tasks()[0]["branch"]), ("from-menu", "fix/menu"))
         self.assertNotIn("description", self.tasks()[0])
         wait_for(lambda: self.active() == "1|")
         os.write(master, b"\x17d")
@@ -854,14 +936,14 @@ class SessionsTest(SessionFixture):
         os.write(master, b"y")
         wait_for(lambda: not self.tasks())
         self.assertFalse((Path(str(self.root) + "__sessions") / "from-menu").exists())
-        self.git("show-ref", "--verify", "refs/heads/from-menu")
+        self.git("show-ref", "--verify", "refs/heads/fix/menu")
 
-    def test_create_with_branch_never_prompts_for_optional_fields(self):
+    def test_create_with_name_never_prompts_for_optional_fields(self):
         proc, master = self.start_client([str(BIN), "create", "no-questions"])
         wait_for(lambda: proc.poll() is not None)
         self.assertEqual(proc.returncode, 0)
         self.assertNotIn("description", self.tasks()[0])
-        self.assertNotIn("Branch name".encode(), self.outputs[proc.pid])
+        self.assertNotIn(b"Worktree name", self.outputs[proc.pid])
         self.assertNotIn("Description".encode(), self.outputs[proc.pid])
         proc, master = self.start_client([str(BIN), "create", "with-description", "--description", "Explicit description"])
         wait_for(lambda: proc.poll() is not None)
@@ -1011,7 +1093,7 @@ exec {shlex.quote(git)} "$@"
         for name, base, cwd, source, contents in scenarios:
             with self.subTest(base=base):
                 self.gg("create", name, "--base", base, cwd=cwd)
-                task = next(t for t in self.tasks(cwd) if t["branch"] == name)
+                task = next(t for t in self.tasks(cwd) if t["name"] == name)
                 self.assertEqual(task["copy_source"], str(source))
                 self.assertEqual((Path(task["path"]) / ".env").read_text(), contents)
                 self.assertTrue(task["active"])
@@ -1054,7 +1136,7 @@ exec {shlex.quote(git)} "$@"
         blocked.write_text("unreadable")
         blocked.chmod(0)
         try:
-            self.assertNotEqual(self.gg("create", "failed-copy", check=False).returncode, 0)
+            self.assertNotEqual(self.gg("create", "--branch", "failed-copy", check=False).returncode, 0)
         finally:
             blocked.chmod(0o600)
         self.assertEqual(self.tasks(), [])
@@ -1131,7 +1213,7 @@ exec {shlex.quote(git)} "$@"
         self.assertEqual(result.read_text(), "077809")
 
     def test_legacy_registry_and_welcome_upgrade_preserve_running_terminals(self):
-        self.create()
+        self.gg("create", "--branch", "task")
         task_path = self.tasks()[0]["path"]
         self.gg("stop", "task")
         legacy_path = Path(str(self.root) + "__sessions") / "1"

@@ -44,6 +44,9 @@ h1 { font-size:16px; font-weight:600; margin:0 0 5px; letter-spacing:.02em; }
 .session-row.selected::before { content:none; }
 .open-mark { width:2ch; flex-shrink:0; }
 .activity { width:2ch; flex-shrink:0; color:var(--muted); }
+.copy-spinner { display:inline-block; width:1ch; text-align:center; animation:copy-spin .8s steps(8) infinite; }
+.copy-phase { flex-shrink:0; margin-left:1ch; }
+@keyframes copy-spin { to { transform:rotate(1turn); } }
 .activity.running { color:var(--green); }
 .session-name { overflow:hidden; text-overflow:ellipsis; }
 .details { flex-shrink:0; border-top:1px solid var(--line); padding-top:calc(var(--row) / 2); margin-top:calc(var(--row) / 2); overflow:hidden; }

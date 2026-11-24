@@ -29,10 +29,10 @@ create SHALL select --template → default_template → shell. The registry SHAL
 - **THEN** start reports the template and allows explicit recovery with --template shell
 
 ### Requirement: Explicit interactive selection
---choose-template SHALL require TTY stdin/stdout and conflict with --template. Missing Git branch names SHALL remain required; outside Git, names SHALL be optional and default to the directory name. Confirming an explicit picker with a supplied name SHALL proceed with creation; Esc SHALL cancel creation. Ordinary create with complete arguments SHALL ask no questions. Dashboard Tab SHALL open optional selection; Esc SHALL restore the previous template.
+--choose-template SHALL require TTY stdin/stdout and conflict with --template. Git worktrees SHALL require a name, inferred from an explicit --branch when omitted; outside Git, names SHALL be optional and default to the directory name. Confirming an explicit picker with a supplied name SHALL proceed with creation; Esc SHALL cancel creation. Ordinary create with complete arguments SHALL ask no questions. Dashboard Tab SHALL open optional selection; Esc SHALL restore the previous template.
 
 #### Scenario: Automated creation
-- **WHEN** create receives a branch and --template without a TTY
+- **WHEN** create receives a worktree name and --template without a TTY
 - **THEN** the template applies without interactive input
 
 #### Scenario: Picker cancellation
@@ -62,7 +62,7 @@ Entries SHALL run sequentially in one shell context after interactive initializa
 - **THEN** remaining entries do not run and the terminal accepts ordinary shell input
 
 ### Requirement: Literal startup environment
-User terminals SHALL receive GG_BRANCH, GG_WORKTREE and GG_PROJECT_ROOT through the environment. Branch names and paths SHALL NOT be interpolated into generated shell text. Paths with spaces and valid branches containing shell metacharacters SHALL remain literal data.
+User terminals SHALL receive GG_BRANCH, GG_WORKTREE and GG_PROJECT_ROOT through the environment. GG_BRANCH SHALL be the actual branch at the launch of each terminal, including restarts and additional panes, or empty at detached HEAD. Branch names and paths SHALL NOT be interpolated into generated shell text. Paths with spaces and valid branches containing shell metacharacters SHALL remain literal data.
 
 #### Scenario: Branch with shell metacharacters
 - **WHEN** a valid branch contains dollar expressions or parentheses

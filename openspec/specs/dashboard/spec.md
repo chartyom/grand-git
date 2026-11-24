@@ -104,11 +104,16 @@ The list SHALL offer N to create, Q to detach, T for an extra terminal, S to sta
 - **THEN** they choose Below or Right before pane creation and the new shell receives focus
 
 ### Requirement: Required-only dashboard creation
-N SHALL create within the selected section, using its directory or the selected session as base. Git SHALL require a branch; directories SHALL offer an optional name. The form SHALL show a template: Tab opens its list, arrows/Enter select, and Esc restores the choice or cancels. Creation SHALL open the terminal. Description SHALL be absent. Without a selection, users SHALL add or select a section first.
+N SHALL create within the selected section, using its directory or the selected session as base. Git SHALL require a worktree name and offer a separate optional branch. Ordinary directories SHALL offer an optional name. The form SHALL show a template: Tab opens its list, arrows/Enter select, and Esc restores the choice or cancels. Ordinary creation SHALL open its terminal. Description SHALL be absent. Without a selection, users SHALL add or select a section first.
 
 #### Scenario: Git creation
 - **WHEN** N is pressed on a Git project session
-- **THEN** a worktree is created from the selected base with default_template and no extra questions
+- **THEN** Enter creates a detached worktree from the selected base with default_template when the branch is empty
+- **AND** Up, Down or a click selects the optional branch field
+
+#### Scenario: Branch changes in a live terminal
+- **WHEN** the user switches to another branch or detaches HEAD in a managed worktree
+- **THEN** the refreshed details and search reflect the new checkout while the row keeps its name and open terminal
 
 #### Scenario: Directory creation
 - **WHEN** N is pressed on an ordinary group and the form is confirmed with the default name
@@ -117,6 +122,21 @@ N SHALL create within the selected section, using its directory or the selected 
 #### Scenario: Optional picker cancellation
 - **WHEN** the user opens Tab and cancels selection
 - **THEN** the name and previous template remain
+
+### Requirement: Background Git worktree preparation
+The dashboard SHALL select an animated preparation row on accepting a Git worktree and show the copying phase during file transfer. Compact terminals SHALL show progress in the status line. Other sessions SHALL remain usable. Completion SHALL replace the row and open its terminal only if the initiating dashboard stayed on it with list focus. Session and bulk actions SHALL target completed sessions.
+
+#### Scenario: Continue working during a large copy
+- **WHEN** a worktree is copying ignored dependencies and the user opens another session of the same project
+- **THEN** that terminal accepts input during copying and keeps focus when the worktree becomes ready
+
+#### Scenario: Leave and return
+- **WHEN** a dashboard quits or disconnects during worktree preparation
+- **THEN** creation continues and another dashboard can see its pending row or completed session
+
+#### Scenario: Correct a background error
+- **WHEN** the copy fails
+- **THEN** the animation stops, the row reports its error and Enter restores the submitted name, branch and template
 
 ### Requirement: Target-bound deletion confirmation
 Confirmations SHALL stay bound to the selected record regardless of list changes. Y SHALL apply only to it; N/Esc SHALL cancel.
@@ -130,7 +150,7 @@ Confirmations SHALL stay bound to the selected record regardless of list changes
 - **THEN** the neighboring task is unaffected
 
 ### Requirement: Searchable mouse-enabled session list
-Each session SHALL use one row with name and live terminal activity, without IDs or coded status suffixes. Details SHALL show path, terminal count, agent, Git and open state when space permits; Git SHALL be inapplicable to plain terminals. / SHALL search names, branches and groups when eligible; A SHALL filter activity across accessible groups. A single click or Enter SHALL open/start a session; clicking a folder SHALL select it and the wheel SHALL scroll.
+One row SHALL show each name and live activity without IDs or status suffixes. Details SHALL show path, terminal count, agent, Git status, current branch or detached HEAD and open state when space permits; Git SHALL be inapplicable to plain terminals. / SHALL search names, branches and groups when eligible; A SHALL filter activity across accessible groups. A single click or Enter SHALL open/start a session; clicking a folder SHALL select it and the wheel SHALL scroll.
 
 #### Scenario: Session presentation
 - **WHEN** active and stopped sessions of different types exist
@@ -299,6 +319,18 @@ Sections SHALL offer T for a persistent shell in their exact directory and N for
 #### Scenario: Empty folder after deletion
 - **WHEN** the last session in a folder is deleted
 - **THEN** the unfiltered folder remains selectable and supports creation
+
+### Requirement: Enable relative Git worktree paths
+Only available Git sections SHALL offer R. Confirmation SHALL bind to the selected project and ask whether all clients, including the host, use Git 2.48+. After checking local Git, gg SHALL set worktree.useRelativePaths in the repository, repair existing links and verify each worktree with git status. Errors SHALL identify the cause and allow retry.
+
+#### Scenario: Share an existing and a new worktree
+- **WHEN** a user confirms on a Git section with Git 2.48+ and the host and VM share the main repository and its sibling worktrees in the same layout
+- **THEN** the project's existing links are converted and future worktrees use relative links
+- **AND** Git can report local changes in both environments while the existing gg sessions and their terminals stay in place
+
+#### Scenario: Cancel or use an older Git
+- **WHEN** the user cancels the confirmation or confirms with a local Git older than 2.48
+- **THEN** the repository configuration and worktree links remain unchanged
 
 ### Requirement: Independent hover preview
 Hover SHALL preview session or folder details without changing selection, focus or the open terminal. Leaving the list SHALL restore selected-item details. Motion SHALL use the displayed list's cached data without starting terminals.

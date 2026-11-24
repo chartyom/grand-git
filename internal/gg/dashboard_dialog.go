@@ -77,7 +77,17 @@ func (m sidebar) dialogOverlay(width, height int) dialogFrame {
 func (m sidebar) dialog(width, height int) (string, []hit) {
 	c, footer := textCanvas{width: width}, textCanvas{width: width}
 	focus := 1
-	if m.confirming {
+	if m.confirming && m.confirmAction == "relative-paths" {
+		c.add(accent.Render(m.cfg.text("Enable relative worktree paths?", "Включить относительные пути worktree?")))
+		c.add(dim.Render(oneLine(m.confirmName)))
+		text := m.cfg.text(
+			"Confirm Git 2.48 or newer on the host and every Git client using this repository. Git will use relative paths for all existing and future worktrees.",
+			"Подтвердите, что на хосте и у всех клиентов этого репозитория Git версии 2.48 или новее. Git включит относительные пути для всех существующих и новых worktree.")
+		for _, line := range strings.Split(ansi.Wrap(text, width, ""), "\n") {
+			c.add(line)
+		}
+		footer.buttons(shortcut{"Y", m.cfg.text("Enable", "Включить")}, shortcut{"N/Esc", m.cfg.text("Cancel", "Отмена")})
+	} else if m.confirming {
 		verb := m.cfg.text("Stop", "Остановить")
 		if m.confirmAction == "delete" {
 			verb = m.cfg.text("Delete", "Удалить")
@@ -100,7 +110,7 @@ func (m sidebar) dialog(width, height int) (string, []hit) {
 			if m.confirmBulk {
 				text = m.cfg.text("Managed worktrees will be removed. Protected folders, ordinary directory files and Git branches will remain.", "Worktree-сессии будут удалены. Защищённые папки, файлы обычных директорий и Git-ветки сохранятся.")
 			} else if t, err := m.findTask(m.confirmGroup, m.confirmID); err == nil && !t.plain() {
-				text = m.cfg.text("Worktree will be removed. Git branch will remain.", "Рабочая копия будет удалена. Git-ветка сохранится.")
+				text = m.cfg.text("Worktree will be removed. Existing Git branches will remain.", "Рабочая копия будет удалена. Существующие ветки сохранятся.")
 			}
 			for _, line := range strings.Split(ansi.Wrap(text, width, ""), "\n") {
 				c.add(line)

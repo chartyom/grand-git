@@ -34,6 +34,7 @@ async function audit(page) {
 async function scenario(page,id) {await page.getByTestId('gg-scenario').selectOption(id); await audit(page);}
 async function press(page,key) {await page.getByTestId('gg-session-list').focus(); await page.keyboard.press(key); await audit(page);}
 async function click(page,id) {await page.getByTestId(id).click(); await audit(page);}
+const waitCreated = (page, name) => page.waitForFunction(name => window.GG.state.sessions.some(s => s.name === name), name);
 const snapshot = page => page.evaluate(() => JSON.parse(JSON.stringify(window.GG.state)));
 
 test('every scenario and dialog has complete unique selectors', () => fixture(async page => {
@@ -70,9 +71,11 @@ test('create validates branches, picker cancellation preserves inputs, and IDs s
   assert.equal(await page.getByTestId('gg-create-name').inputValue(),'feat/payments');
   assert.match(await page.getByTestId('gg-create-template').innerText(),/shell/);
   await page.keyboard.press('Tab'); await click(page,'gg-template-codex'); await click(page,'gg-create-submit');
+  await waitCreated(page,'feat/payments');
   let s = await snapshot(page); const created = s.sessions.find(s => s.name === 'feat/payments');
+  assert.equal(created.branch,''); assert.ok(!s.branches.includes('1:feat/payments'));
   assert.equal(created.template,'codex'); assert.equal(s.open,`1-${created.id}`); assert.equal(s.focus,'terminal');
-  assert.equal(created.path,'/workspace/atlas__sessions/feat/payments');
+  assert.equal(created.path,'/workspace/atlas__sessions/feat~payments');
   await click(page,'gg-next-panel'); await press(page,'n');
   await page.getByTestId('gg-create-name').fill('feat/payments'); await click(page,'gg-create-submit');
   assert.match(await page.getByTestId('gg-dialog-error').innerText(),/already/);
@@ -89,6 +92,29 @@ test('ordinary directories allow duplicate names, retain files on deletion, and 
   assert.deepEqual(await page.getByTestId('gg-setting-scope').locator('option').evaluateAll(n => n.map(x => x.value)),['global']);
   await page.keyboard.press('Escape'); await press(page,'d'); await click(page,'gg-confirm-yes');
   s = await snapshot(page); assert.ok(!s.sessions.some(x => `${x.group}-${x.id}` === created)); assert.deepEqual(s.files,files);
+}));
+
+test('deleting a detached commit preserves the worktree', () => fixture(async page => {
+  await scenario(page,'detached-commit');
+  const before = await snapshot(page);
+  await press(page,'d'); await click(page,'gg-confirm-yes');
+  const after = await snapshot(page);
+  assert.deepEqual(after.sessions,before.sessions);
+  assert.match(after.notice.message[0],/git switch -c/);
+}));
+
+test('long worktree names support independent branches and use a single hashed folder', () => fixture(async page => {
+  const branch = 'данные/'.repeat(22) + 'отчёт';
+  const digest = require('node:crypto').createHash('sha256').update(branch).digest('hex');
+  await press(page,'n');
+  await page.getByTestId('gg-create-name').fill(branch);
+  await page.keyboard.press('ArrowDown'); await page.keyboard.type('feat/explicit');
+  await page.keyboard.press('Enter');
+  await page.getByTestId('gg-dialog').waitFor({state:'hidden'});
+  await waitCreated(page,branch);
+  const created = (await snapshot(page)).sessions.at(-1);
+  assert.equal(created.name, branch); assert.equal(created.branch, 'feat/explicit');
+  assert.equal(created.path, '/workspace/atlas__sessions/~' + digest);
 }));
 test('split cancellation, placements and cross-project switches preserve terminal identity and output', () => fixture(async page => {
   const original = (await snapshot(page)).sessions.find(s => s.id === 2 && s.group === 1).panes[0];
@@ -116,7 +142,7 @@ test('stop background keeps the open session; start replaces panes; delete retai
   assert.notEqual(s.sessions.find(s => s.group === 1 && s.id === 4).panes[0].id,previousPane);
   await click(page,'gg-next-panel'); await press(page,'d'); await click(page,'gg-confirm-yes');
   s = await snapshot(page); assert.equal(s.open,null); assert.ok(s.branches.includes('1:refactor/cache'));
-  assert.ok(!s.files.includes('/workspace/atlas__sessions/refactor/cache'));
+  assert.ok(!s.files.includes('/workspace/atlas__sessions/refactor~cache'));
 }));
 test('dirty and protected sessions cannot be deleted; disappeared confirmation never targets the neighbor', () => fixture(async page => {
   await scenario(page,'dirty'); const initial = await snapshot(page);
@@ -222,7 +248,7 @@ test('keyboard modal choices follow arrows and native Tab focus', () => fixture(
   await press(page,'n'); await page.getByTestId('gg-create-name').fill('feat/keyboard');
   await page.keyboard.press('Tab'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   assert.match(await page.getByTestId('gg-create-template').innerText(),/codex/);
-  await page.keyboard.press('Enter'); s = await snapshot(page);
+  await page.keyboard.press('Enter'); await waitCreated(page,'feat/keyboard'); s = await snapshot(page);
   assert.equal(s.sessions.find(s => s.name === 'feat/keyboard').template,'codex');
 }));
 
@@ -236,14 +262,14 @@ test('worktrees and ordinary terminals share a list and hover previews without s
   assert.equal(await page.getByTestId('gg-sidebar-group-1-session-2-kind').innerText(),'⎇');
   const initial = await snapshot(page);
   await page.getByTestId('gg-sidebar-group-2-session-2-row').hover(); await audit(page);
-  assert.equal(await page.getByTestId('gg-details-path').getAttribute('title'),'/workspace/beacon__sessions/feat/auth');
+  assert.equal(await page.getByTestId('gg-details-path').getAttribute('title'),'/workspace/beacon__sessions/feat~auth');
   assert.equal(await page.getByTestId('gg-details-git-value').innerText(),'modified');
   assert.deepEqual(await snapshot(page),initial);
   await page.getByTestId('gg-sidebar-group-3-heading').hover();
   assert.equal(await page.getByTestId('gg-details-path').getAttribute('title'),'/workspace/scratch');
   assert.equal(await page.getByTestId('gg-details-sessions-value').innerText(),'3');
   await page.getByTestId('gg-masthead').hover();
-  assert.equal(await page.getByTestId('gg-details-path').getAttribute('title'),'/workspace/atlas__sessions/feat/auth');
+  assert.equal(await page.getByTestId('gg-details-path').getAttribute('title'),'/workspace/atlas__sessions/feat~auth');
   await click(page,'gg-sidebar-group-1-session-3-row');
   const s = await snapshot(page); assert.equal(s.open,'1-3'); assert.equal(s.focus,'terminal');
   assert.equal(s.sessions.find(s => s.group === 1 && s.id === 3).panes.length,1);
@@ -289,13 +315,29 @@ test('folder keyboard focus offers group actions and creates a plain shell or a 
   await click(page,'gg-menu-new');
   assert.equal((await snapshot(page)).modal.path,'/workspace/atlas');
   await page.getByTestId('gg-create-name').fill('feat/from-folder'); await click(page,'gg-create-submit');
+  await waitCreated(page,'feat/from-folder');
   created = (await snapshot(page)).sessions.at(-1);
-  assert.equal(created.kind,'worktree'); assert.equal(created.path,'/workspace/atlas__sessions/feat/from-folder');
+  assert.equal(created.kind,'worktree'); assert.equal(created.path,'/workspace/atlas__sessions/feat~from-folder');
   await page.getByTestId('gg-sidebar-group-3-heading').click({button:'right'});
   assert.equal(await page.getByTestId('gg-menu-new').count(),1);
   assert.equal(await page.getByTestId('gg-menu-terminal').count(),1);
   assert.equal(await page.getByTestId('gg-menu-stop').count(),1);
   assert.equal(await page.getByTestId('gg-menu-delete').count(),1);
+}));
+
+test('relative paths require confirmation on the selected Git project', () => fixture(async page => {
+  const heading = page.getByTestId('gg-sidebar-group-2-heading');
+  await heading.click({button:'right'});
+  await click(page,'gg-menu-relative-paths');
+  assert.match(await page.getByTestId('gg-dialog-target').innerText(), /beacon/);
+  assert.match(await page.getByTestId('gg-dialog-compatibility').innerText(), /2\.48/);
+  await page.keyboard.press('Escape');
+  assert.deepEqual((await snapshot(page)).relativeWorkspaces, []);
+  await press(page,'r');
+  await click(page,'gg-confirm-yes');
+  assert.deepEqual((await snapshot(page)).relativeWorkspaces, [2]);
+  await page.getByTestId('gg-sidebar-group-3-heading').click({button:'right'});
+  assert.equal(await page.getByTestId('gg-menu-relative-paths').count(), 0);
 }));
 
 test('bulk actions retain files and branches, preserve other groups and keep confirmation targets fixed', () => fixture(async page => {
@@ -428,7 +470,40 @@ test('empty dashboard adds exact-path sections, deduplicates and removes only em
   await click(page,'gg-next-panel'); await click(page,`gg-sidebar-group-${src.id}-heading`); await press(page,'x');
   assert.equal((await snapshot(page)).groups.length,1);
   await press(page,'n'); await page.getByTestId('gg-create-name').fill('feat/nested'); await click(page,'gg-create-submit');
+  await waitCreated(page,'feat/nested');
   const worktree = (await snapshot(page)).sessions.find(s => s.name === 'feat/nested');
-  assert.equal(worktree.path,'/workspace/atlas__sessions/feat/nested'); assert.equal(worktree.group,src.id);
+  assert.equal(worktree.path,'/workspace/atlas__sessions/feat~nested'); assert.equal(worktree.group,src.id);
   assert.notEqual(root.id,src.id);
+}));
+
+test('copy progress survives detach and completion preserves later terminal focus', () => fixture(async page => {
+  await scenario(page,'copy'); await press(page,'n');
+  await page.getByTestId('gg-create-name').fill('background'); await click(page,'gg-create-submit');
+  const job = (await snapshot(page)).jobs[0];
+  const row = page.getByTestId(`gg-sidebar-group-1-session-${job.id}-row`);
+  assert.match(await row.innerText(), /Copying/);
+  assert.equal((await snapshot(page)).sessions.some(s => s.name === 'background'),false);
+  await press(page,'q'); await click(page,'gg-resume');
+  assert.match(await row.innerText(), /Copying/);
+  await page.getByTestId('gg-size').selectOption('99x24');
+  await click(page,'gg-sidebar-group-1-session-2-row');
+  assert.match(await page.getByTestId('gg-status-copy').innerText(), /Copying/);
+  await click(page,'gg-simulate');
+  const state = await snapshot(page);
+  assert.equal(state.jobs.length,0); assert.equal(state.open,'1-2'); assert.equal(state.focus,'terminal');
+  assert.equal(state.sessions.find(s => s.name === 'background').panes.length,1);
+}));
+
+test('copy failure retains its draft and retry opens the newly ready worktree', () => fixture(async page => {
+  await scenario(page,'copy-error'); await press(page,'n');
+  await page.getByTestId('gg-create-name').fill('retry'); await page.getByTestId('gg-create-branch').fill('feat/retry');
+  await click(page,'gg-create-submit'); await click(page,'gg-simulate');
+  assert.match(await page.getByTestId('gg-details-state-value').innerText(), /Cannot read/);
+  await press(page,'Enter');
+  assert.equal(await page.getByTestId('gg-create-name').inputValue(),'retry');
+  assert.equal(await page.getByTestId('gg-create-branch').inputValue(),'feat/retry');
+  await click(page,'gg-create-submit'); await click(page,'gg-simulate');
+  const state = await snapshot(page);
+  assert.equal(state.jobs.length,0); assert.equal(state.focus,'terminal'); assert.equal(state.open,state.selected);
+  assert.equal(state.sessions.at(-1).name,'retry');
 }));

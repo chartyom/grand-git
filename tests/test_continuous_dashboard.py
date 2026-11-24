@@ -164,7 +164,7 @@ class ContinuousDashboardTests(SessionFixture):
         root_row = self.local_terminal()
         root_pane = self.terminal(int(root_row["id"].split(":")[1]))
         root_pid = self.tmux("display-message", "-p", "-t", root_pane, "#{pane_pid}").stdout
-        self.gg("create", "feat/nested", "--no-copy", cwd=child)
+        self.gg("create", "--branch", "feat/nested", "--no-copy", cwd=child)
         catalog_path = Path(self.env["XDG_STATE_HOME"]) / "grand-git/workspaces.json"
         catalog = json.loads(catalog_path.read_text())
         src = next(section for section in catalog["sections"] if section["path"] == str(child))
@@ -190,6 +190,54 @@ class ContinuousDashboardTests(SessionFixture):
         os.write(master, b"q")
         wait_for(lambda: proc.poll() is not None)
         self.assertTrue(self.local_terminal()["active"])
+
+    def test_enable_relative_paths_from_git_folder_actions(self):
+        self.create("feat/data")
+        row = self.tasks()[0]
+        worktree = Path(row["path"])
+        self.assertEqual(worktree, Path(str(self.root) + "__sessions") / "feat~data")
+        dotgit = worktree / ".git"
+        original = dotgit.read_bytes()
+        (worktree / "README").write_text("work in progress\n")
+        pane = self.terminal(row["id"])
+
+        def pane_pid():
+            return self.tmux("display-message", "-p", "-t", pane, "#{pane_pid}").stdout
+
+        original_pid = pane_pid()
+        proc, master = self.start_client([str(BIN), "dashboard"], cwd=self.tmp.name)
+        wait_for(lambda: b"Add section" in self.outputs[proc.pid])
+
+        def open_confirmation():
+            start = len(self.outputs[proc.pid])
+            os.write(master, b"\r")
+            wait_for(lambda: b"Enable relative worktree paths" in self.outputs[proc.pid][start:])
+            os.write(master, b"r")
+            wait_for(lambda: b"2.48" in self.outputs[proc.pid][start:])
+
+        open_confirmation()
+        os.write(master, b"n")
+        self.assertEqual(dotgit.read_bytes(), original)
+        self.assertNotEqual(self.git("config", "--local", "--get", "worktree.useRelativePaths", check=False).returncode, 0)
+        open_confirmation()
+        os.write(master, b"y")
+        help_text = self.git("worktree", "repair", "-h", check=False)
+        if "relative-paths" not in help_text.stdout + help_text.stderr:
+            wait_for(lambda: b"2.48+ required" in self.outputs[proc.pid])
+            self.assertEqual(dotgit.read_bytes(), original)
+            self.assertNotEqual(self.git("config", "--local", "--get", "worktree.useRelativePaths", check=False).returncode, 0)
+        else:
+            registry = self.root / ".git" / "grand-git" / "state.json"
+            wait_for(lambda: json.loads(registry.read_text()).get("notice") == "Relative worktree paths enabled")
+            self.assertEqual(self.git("config", "--local", "--get", "worktree.useRelativePaths").stdout.strip(), "true")
+            self.create("fix/data")
+            for task in self.tasks():
+                path = Path(task["path"])
+                pointer = (path / ".git").read_text().strip().removeprefix("gitdir: ")
+                self.assertFalse(Path(pointer).is_absolute(), pointer)
+                self.assertTrue((path / pointer / "HEAD").is_file())
+            self.assertEqual(self.git("status", "--porcelain", cwd=worktree).stdout, " M README\n")
+        self.assertEqual(pane_pid(), original_pid)
 
     def test_terminal_mouse_input_reaches_selected_pane(self):
         proc, master = self.launch_terminal()

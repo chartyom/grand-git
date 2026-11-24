@@ -11,52 +11,34 @@ import (
 
 func (p *Project) validManagedPath(t *Task) bool {
 	base := p.Root + "__sessions"
-	if t.Path == filepath.Join(base, strconv.Itoa(t.ID)) {
-		return true
+	if !filepath.IsLocal(t.Branch) || t.Branch == "." || filepath.Clean(t.Branch) != t.Branch || strings.Contains(t.Branch, "~") {
+		return false
 	}
-	path := filepath.Join(base, t.Branch)
-	rel, err := filepath.Rel(base, path)
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && t.Path == path
+	return t.Path == filepath.Join(base, worktreeDirName(t.Branch)) ||
+		t.Path == filepath.Join(base, t.Branch) || t.Path == filepath.Join(base, strconv.Itoa(t.ID))
 }
 
-func safeSessionParents(base, path string) error {
-	rel, err := filepath.Rel(base, path)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return errors.New("invalid session path")
+func ensureSessionsDir(base string) error {
+	info, err := os.Lstat(base)
+	if errors.Is(err, os.ErrNotExist) {
+		return os.Mkdir(base, 0755)
 	}
-	parts := strings.Split(filepath.Dir(rel), string(filepath.Separator))
-	current := base
-	for i := -1; i < len(parts); i++ {
-		if i >= 0 {
-			if parts[i] == "." {
-				continue
-			}
-			current = filepath.Join(current, parts[i])
-		}
-		info, err := os.Lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			if err = os.Mkdir(current, 0755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("session parent is not a real directory: %s", current)
-		}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("session parent is not a real directory: %s", base)
 	}
 	return nil
 }
 
-func taskByBranch(s *State, branch string) (*Task, error) {
+func taskByWorktreeName(s *State, name string) (*Task, error) {
 	for _, t := range s.Tasks {
-		if !t.plain() && t.Branch == branch {
+		if !t.plain() && t.label() == name {
 			return t, nil
 		}
 	}
-	return nil, fmt.Errorf("session %q not found", branch)
+	return nil, fmt.Errorf("session %q not found", name)
 }
 
 func (p *Project) validateWorktree(t *Task) error {
@@ -111,6 +93,56 @@ func (p *Project) Start(id int, template ...string) error {
 	})
 }
 
+func (p *Project) checkDelete(t *Task, force, all bool) error {
+	if t.plain() {
+		return nil
+	}
+	if t.Protected {
+		if all {
+			return nil
+		}
+		return errors.New(p.text("original worktree is protected; it cannot be deleted", "исходный worktree защищён: удалять его нельзя"))
+	}
+	jobs, err := p.readJobs()
+	if err != nil {
+		return err
+	}
+	for _, j := range jobs {
+		relative, relErr := filepath.Rel(t.Path, j.CWD)
+		if j.Phase != "failed" && (j.Source == t.Path || relErr == nil && filepath.IsLocal(relative)) {
+			if err := p.recoverAbandonedJob(j.ID); err != nil {
+				return err
+			}
+			return fmt.Errorf(p.text("worktree is a copy source for %q; wait for its creation to finish", "worktree используется как источник для %q; дождитесь завершения создания"), j.Name)
+		}
+	}
+	if err := p.validateWorktree(t); err != nil {
+		return err
+	}
+	if force {
+		return nil
+	}
+	clean, err := p.clean(t)
+	if err != nil {
+		return err
+	}
+	if !clean {
+		return errors.New(p.text("uncommitted or untracked files; commit them or explicitly use --force", "есть незакоммиченные или неотслеживаемые файлы; сохраните их либо явно используйте --force"))
+	}
+	branch, err := currentBranch(t.Path)
+	if err != nil || branch != "" {
+		return err
+	}
+	refs, err := command(t.Path, "git", "for-each-ref", "--contains=HEAD", "--count=1", "--format=%(refname)", "refs/heads/", "refs/remotes/", "refs/tags/")
+	if err != nil {
+		return err
+	}
+	if refs == "" {
+		return errors.New(p.text("no branch or tag contains this detached HEAD; save it with git switch -c <branch> or explicitly use --force", "коммит без ветки отсутствует в истории веток и тегов; сохраните его через git switch -c <ветка> или явно используйте --force"))
+	}
+	return nil
+}
+
 func (p *Project) preflightDelete(ids []int, force, all bool) error {
 	return p.transaction(func(s *State) error {
 		for _, id := range ids {
@@ -118,26 +150,8 @@ func (p *Project) preflightDelete(ids []int, force, all bool) error {
 			if err != nil {
 				return err
 			}
-			if t.plain() {
-				continue
-			}
-			if t.Protected {
-				if all {
-					continue
-				}
-				return errors.New(p.text("original worktree is protected", "исходный worktree защищён"))
-			}
-			if err = p.validateWorktree(t); err != nil {
-				return err
-			}
-			if !force {
-				clean, err := p.clean(t)
-				if err != nil {
-					return err
-				}
-				if !clean {
-					return errors.New(p.text("uncommitted or untracked files; explicitly use --force", "есть незакоммиченные или неотслеживаемые файлы; явно используйте --force"))
-				}
+			if err := p.checkDelete(t, force, all); err != nil {
+				return fmt.Errorf("%s: %w", t.label(), err)
 			}
 		}
 		return nil
@@ -164,33 +178,15 @@ func (p *Project) operate(action string, ids []int, force, all bool, surviving .
 		}
 		if action == "delete" {
 			for _, t := range targets {
-				if t.plain() {
-					continue
-				}
-				if t.Protected {
-					if all {
-						continue
-					}
-					return errors.New(p.text("original worktree is protected; it cannot be deleted", "исходный worktree защищён: удалять его нельзя"))
-				}
-				if err := p.validateWorktree(t); err != nil {
-					return fmt.Errorf("%s: %w", t.Branch, err)
-				}
-				if !force {
-					clean, err := p.clean(t)
-					if err != nil {
-						return err
-					}
-					if !clean {
-						return fmt.Errorf(p.text("%s: uncommitted or untracked files; commit them or explicitly use --force", "%s: есть незакоммиченные или неотслеживаемые файлы; сохраните их либо явно используйте --force"), t.Branch)
-					}
+				if err := p.checkDelete(t, force, all); err != nil {
+					return fmt.Errorf("%s: %w", t.label(), err)
 				}
 			}
 		}
 		var failures []error
 		for _, t := range targets {
 			if err := p.killTask(t.ID); err != nil {
-				failures = append(failures, fmt.Errorf("%s: %w", t.Branch, err))
+				failures = append(failures, fmt.Errorf("%s: %w", t.label(), err))
 				continue
 			}
 			_ = os.Remove(p.agentPath(t.ID))
@@ -205,12 +201,9 @@ func (p *Project) operate(action string, ids []int, force, all bool, surviving .
 				removeTask(s, t.ID)
 				continue
 			}
-			if !force {
-				clean, err := p.clean(t)
-				if err != nil || !clean {
-					failures = append(failures, fmt.Errorf(p.text("%s: changes found after stopping; files preserved", "%s: после остановки обнаружены изменения; файлы сохранены"), t.Branch))
-					continue
-				}
+			if err := p.checkDelete(t, force, all); err != nil {
+				failures = append(failures, fmt.Errorf("%s: %w", t.label(), err))
+				continue
 			}
 			args := []string{"worktree", "remove"}
 			if force || len(t.Generated) > 0 {
@@ -218,7 +211,7 @@ func (p *Project) operate(action string, ids []int, force, all bool, surviving .
 			}
 			args = append(args, "--", t.Path)
 			if _, err := command(p.Root, "git", args...); err != nil {
-				failures = append(failures, fmt.Errorf("%s: %w", t.Branch, err))
+				failures = append(failures, fmt.Errorf("%s: %w", t.label(), err))
 				continue
 			}
 			for i, record := range s.Tasks {

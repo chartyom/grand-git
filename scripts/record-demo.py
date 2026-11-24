@@ -37,7 +37,7 @@ class Recording:
             GIT_CONFIG_GLOBAL="/dev/null",
             GIT_CONFIG_SYSTEM="/dev/null",
             SHELL="/bin/sh", TERM="xterm-256color", COLORTERM="truecolor",
-            LANG="C.UTF-8", LC_ALL="C.UTF-8", PS1="${GG_BRANCH:-atlas} $ ",
+            LANG="C.UTF-8", LC_ALL="C.UTF-8", PS1="${PWD##*/} $ ",
         )
         self.socket = "gg-" + hashlib.sha256(str(self.root / ".git").encode()).hexdigest()[:16]
         self.client = None
@@ -137,15 +137,16 @@ class Recording:
 
     def walkthrough(self):
         self.hold(0.6)
-        self.command("gg create feat/login")
-        self.wait_for(lambda: "Session created: feat/login" in self.screen())
+        self.command("gg create clone1")
+        self.wait_for(lambda: "Session created: clone1" in self.screen())
         self.hold(1.2)
         self.command("gg dashboard")
         self.wait_for(lambda: "No terminal open" in self.screen())
         self.hold(0.8)
         self.press("j", "Enter")
-        self.wait_for(lambda: "feat/login $" in self.screen())
+        self.wait_for(lambda: "clone1 $" in self.screen())
         self.hold(0.5)
+        self.command("git switch -c feat/login")
         self.command("echo 'login_enabled = True' > app.py")
         self.command("git diff")
         self.wait_for(lambda: "+login_enabled = True" in self.screen())
@@ -153,12 +154,12 @@ class Recording:
         self.press("C-w", "n")
         self.wait_for(lambda: "Template" in self.screen())
         self.hold(0.6)
-        self.type("fix/header")
+        self.type("clone2")
         self.hold(0.5)
         self.press("Enter")
-        self.wait_for(lambda: "fix/header $" in self.screen())
+        self.wait_for(lambda: "clone2 $" in self.screen())
         self.command("git status -sb")
-        self.wait_for(lambda: "## fix/header" in self.screen())
+        self.wait_for(lambda: "## HEAD (no branch)" in self.screen())
         self.command("cat app.py")
         self.wait_for(lambda: "login_enabled = False" in self.screen())
         self.hold(1.8)
@@ -172,9 +173,9 @@ class Recording:
         self.command("cat app.py")
         self.hold(2)
         assert self.terminal_pids() == pids, "Switching restarted a terminal"
-        worktrees = Path(str(self.root) + "__sessions")
-        assert (worktrees / "feat/login/app.py").read_text() == "login_enabled = True\n"
-        assert (worktrees / "fix/header/app.py").read_text() == "login_enabled = False\n"
+        worktrees = {row["name"]: Path(row["path"]) for row in self.sessions()}
+        assert (worktrees["clone1"] / "app.py").read_text() == "login_enabled = True\n"
+        assert (worktrees["clone2"] / "app.py").read_text() == "login_enabled = False\n"
         assert (self.root / "app.py").read_text() == "login_enabled = False\n"
 
     def verify_quit(self):

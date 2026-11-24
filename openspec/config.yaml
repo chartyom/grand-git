@@ -9,7 +9,7 @@ context: |
   The installer defaults to chartyom/grand-git; GG_REPOSITORY can override it.
   Read openspec/project.md and the affected main specs before making changes.
   Invoking gg without a subcommand displays help; dashboard is opened explicitly.
-  Git creation prompts only for a missing required branch; ordinary directory names are optional.
+  Git creation requires a worktree name and defaults to detached HEAD. An explicit --branch selects a branch and supplies the name if omitted. Ordinary directory names are optional.
   Template picking is explicitly opt-in.
   Creation copies Git-ignored local files except shared .gg; --no-copy opts out.
   YAML settings/templates live globally or in the primary worktree .gg, shared across worktrees.
@@ -18,7 +18,7 @@ context: |
   Dashboard opens saved folder sections with list focus, no terminal, no temporary session and no automatic cwd registration.
   Q and disconnection preserve persistent sessions; legacy clients retain their invocation-owned temporary cleanup.
   Ctrl+W cycles dashboard panels; Ctrl+G, ordinary arrows, Tab and Ctrl+P belong to terminal applications.
-  Session IDs are globally unique group:session strings; exact branches also address the current Git project.
+  Session IDs are globally unique group:session strings; exact worktree names also address sessions in the current Git project.
   List and dashboard aggregate all known Git projects and ordinary directories. Description is absent.
   Default UI language is English; Russian is configurable.
   Public API changes require the project Codex skill-maintainer role.

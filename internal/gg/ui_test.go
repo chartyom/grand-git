@@ -11,12 +11,12 @@ import (
 
 func key(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
-func TestFormRequiresBranchAndCanCancel(t *testing.T) {
+func TestFormRequiresWorktreeNameAndCanCancel(t *testing.T) {
 	m := newCreateForm()
 	next, _ := m.Update(key(tea.KeyEnter))
 	m = next.(createForm)
 	if m.done || m.message == "" {
-		t.Fatal("empty branch was accepted")
+		t.Fatal("empty worktree name was accepted")
 	}
 	next, _ = m.Update(key(tea.KeyEscape))
 	if !next.(createForm).cancelled {
@@ -24,10 +24,10 @@ func TestFormRequiresBranchAndCanCancel(t *testing.T) {
 	}
 }
 
-func TestFormOnlyPromptsRequiredBranch(t *testing.T) {
+func TestFormSubmitsWithOnlyWorktreeName(t *testing.T) {
 	m := newCreateForm()
-	if len(m.inputs) != 1 || len(m.labels) != 1 || m.labels[0] != "Branch name" {
-		t.Fatal("form must prompt only for the required branch")
+	if !strings.Contains(m.View().Content, "Worktree name") {
+		t.Fatal("form must prompt for the worktree name")
 	}
 	if strings.Contains(m.View().Content, "Description") {
 		t.Fatal("optional description is being prompted")
@@ -35,7 +35,7 @@ func TestFormOnlyPromptsRequiredBranch(t *testing.T) {
 	m.inputs[0].SetValue("feature/login")
 	next, _ := m.Update(key(tea.KeyEnter))
 	if !next.(createForm).done {
-		t.Fatal("branch submission should finish the form immediately")
+		t.Fatal("name submission should finish the form immediately")
 	}
 }
 

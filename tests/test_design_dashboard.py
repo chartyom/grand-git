@@ -40,7 +40,7 @@ def background_cells(captured):
     return rows
 
 
-class DesignDashboardTests(SessionFixture):
+class DashboardScreenFixture(SessionFixture):
     def setUp(self):
         super().setUp()
         self.env.pop("GG_TEST_LEGACY_DASHBOARD", None)
@@ -88,6 +88,47 @@ class DesignDashboardTests(SessionFixture):
     def folder(self):
         self.click(self.root.name, sidebar=True)
         wait_for(lambda: "[T] Terminal" in self.screen())
+
+
+class DesignDashboardTests(DashboardScreenFixture):
+    def test_named_worktrees_keep_terminals_across_branch_changes(self):
+        self.launch()
+        for name in ["clone1", "clone2", "clone3"]:
+            self.folder()
+            self.press(b"n")
+            wait_for(lambda: "Worktree name" in self.screen())
+            self.press(name.encode() + b"\r")
+            wait_for(lambda: any(row["name"] == name for row in self.tasks()))
+            wait_for(lambda: "Create session" not in self.screen())
+
+        def open_worktree(name):
+            self.click(name, sidebar=True)
+            wait_for(lambda: f"▸ ● ⎇  {name}" in self.screen())
+
+        def branch(name):
+            return next(row["branch"] for row in self.tasks() if row["name"] == name)
+
+        rows = self.tasks()
+        self.assertEqual([row["branch"] for row in rows], ["", "", ""])
+        panes = [self.terminal(row["id"]) for row in rows]
+        def pids():
+            return [self.tmux("display-message", "-p", "-t", pane, "#{pane_pid}").stdout for pane in panes]
+
+        before = pids()
+        open_worktree("clone1")
+        self.press(b"git switch -c feat/login\r")
+        wait_for(lambda: branch("clone1") == "feat/login")
+        wait_for(lambda: any("feat/login" in line[:40] for line in self.screen().splitlines()))
+        open_worktree("clone2")
+        self.press(b"git switch release/demo\r")
+        wait_for(lambda: branch("clone2") == "release/demo")
+        open_worktree("clone1")
+        self.press(b"git switch --detach\r")
+        wait_for(lambda: branch("clone1") == "")
+        self.assertEqual(pids(), before)
+        self.assertEqual([(r["id"], r["name"], r["path"]) for r in self.tasks()],
+                         [(r["id"], r["name"], r["path"]) for r in rows])
+        self.assertIsNone(self.proc.poll())
 
     def test_terminal_backgrounds_stay_inside_each_pane(self):
         self.env.pop("NO_COLOR", None)
@@ -224,8 +265,8 @@ class DesignDashboardTests(SessionFixture):
         wait_for(lambda: "No terminal open" in self.screen())
 
     def test_bulk_deletion_preflights_and_uses_surviving_frozen_targets(self):
-        self.create("alpha")
-        self.create("beta")
+        self.gg("create", "--branch", "alpha")
+        self.gg("create", "--branch", "beta")
         dirty = Path(self.tasks()[0]["path"]) / "untracked"
         dirty.write_text("keep\n")
         self.launch()
@@ -259,7 +300,7 @@ class DesignDashboardTests(SessionFixture):
         wait_for(lambda: "Create session" in self.screen())
         self.assertIn("Grand Git", self.screen())
         self.press(b"invalid name\r")
-        wait_for(lambda: "invalid branch name" in self.screen().lower())
+        wait_for(lambda: "invalid worktree name" in self.screen().lower())
         self.assertIn("Create session", self.screen())
         self.assertIn("invalid name", self.screen())
         self.click("[Esc] Cancel")

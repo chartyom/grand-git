@@ -40,14 +40,14 @@ class GlobalDashboardTests(SessionFixture):
         os.write(master, b"/" + query.encode() + b"\r")
 
     def test_global_listing_ids_duplicate_branches_and_safe_plain_deletion(self):
-        self.create("1")
+        self.gg("create", "--branch", "1")
         other = Path(self.tmp.name) / "other"
         other.mkdir()
         self.git("init", "-b", "main", cwd=other)
         (other / "file").write_text("other")
         self.git("add", ".", cwd=other)
         self.commit("other", cwd=other)
-        self.gg("create", "1", cwd=other)
+        self.gg("create", "--branch", "1", cwd=other)
         plain = Path(self.tmp.name) / "plain"
         plain.mkdir()
         (plain / "keep").write_text("user data")
@@ -92,7 +92,7 @@ class GlobalDashboardTests(SessionFixture):
         wait_for(lambda: len(self.launchers()) == 1)
         self.assertNotEqual(self.launchers()[0]["id"], origin["id"])
         self.assertIsNone(second.poll())
-        self.assertTrue(next(r for r in self.public_tasks() if r["branch"] == "persistent")["active"])
+        self.assertTrue(next(r for r in self.public_tasks() if r["name"] == "persistent")["active"])
         self.focus_launcher(other, self.launchers()[0])
         os.write(other, b"q")
         wait_for(lambda: second.poll() is not None)
@@ -208,7 +208,7 @@ class GlobalDashboardTests(SessionFixture):
         templates = Path(self.env["XDG_CONFIG_HOME"]) / "grand-git/templates"
         templates.mkdir(parents=True)
         (templates / "mark.yaml").write_text("commands:\n  - echo started > marker\n")
-        for args in [("--base", "main"), ("--no-copy",)]:
+        for args in [("--base", "main"), ("--no-copy",), ("--branch", "topic")]:
             self.assertNotEqual(self.gg("create", *args, cwd=plain, check=False).returncode, 0)
         self.gg("create", "--template", "mark", cwd=plain)
         wait_for(lambda: (plain / "marker").exists())
@@ -222,7 +222,7 @@ class GlobalDashboardTests(SessionFixture):
         plain.rmdir()
         result = self.gg("list", "--json", check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("healthy", [r["branch"] for r in json.loads(result.stdout)])
+        self.assertIn("healthy", [r["name"] for r in json.loads(result.stdout)])
         self.assertIn("missing", result.stderr)
 
     def test_init_does_not_install_hooks_in_launcher_subdirectory(self):
@@ -260,8 +260,8 @@ class GlobalDashboardTests(SessionFixture):
         before_first = len(self.outputs[first.pid])
         before_second = len(self.outputs[second.pid])
         os.write(master, b"n")
-        wait_for(lambda: b"Branch name" in self.outputs[first.pid][before_first:])
-        self.assertNotIn(b"Branch name", self.outputs[second.pid][before_second:])
+        wait_for(lambda: b"Worktree name" in self.outputs[first.pid][before_first:])
+        self.assertNotIn(b"Worktree name", self.outputs[second.pid][before_second:])
         os.write(master, b"\x1b")
         self.assertIsNone(first.poll())
         self.assertIsNone(second.poll())

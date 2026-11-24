@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Define Grand Git's (`gg`) interface, branch identity, session lifecycle and locale-independent automation.
+Define Grand Git's (`gg`) interface, worktree identity, session lifecycle and locale-independent automation.
 
 ## Requirements
 
@@ -15,25 +15,25 @@ CLI SHALL show help for `gg`, `gg --help`, `gg help` and describe create, list, 
 
 #### Scenario: Command-specific help
 - **WHEN** gg create --help is called
-- **THEN** help explains base, no-copy, template, choose-template, background creation and the absence of description
+- **THEN** help explains branch, base, no-copy, template, choose-template, background creation and the absence of description
 
 ### Requirement: Required-only creation prompts
-In Git, create SHALL prompt only for a missing required branch name in a TTY and reject missing names without a TTY. Outside Git, create [name] SHALL create an ordinary terminal session without branch questions; names SHALL default to the current directory name. Description and --description SHALL be absent. base and no-copy SHALL use flags without prompts and be rejected outside Git. --choose-template SHALL explicitly open a picker, require a TTY and conflict with --template.
+In Git, create SHALL prompt only for a missing required worktree name in a TTY and reject missing names without a TTY. Outside Git, create [name] SHALL create an ordinary terminal session without branch questions; names SHALL default to the current directory name. Description and --description SHALL be absent. branch, base and no-copy SHALL use flags without prompts and be rejected outside Git. --choose-template SHALL explicitly open a picker, require a TTY and conflict with --template.
 
-#### Scenario: Branch supplied
-- **WHEN** a branch name is supplied as an argument
+#### Scenario: Name supplied
+- **WHEN** a worktree name is supplied as an argument
 - **THEN** creation asks no questions without --choose-template
 
-#### Scenario: Missing branch in a terminal
+#### Scenario: Missing worktree name in a terminal
 - **WHEN** create runs in a TTY without a name
-- **THEN** the form requests a branch name and submission immediately completes it
+- **THEN** the form requests a worktree name and submission immediately completes it
 
 #### Scenario: Explicit optional values
 - **WHEN** base or no-copy is supplied
 - **THEN** parameters apply without interactive questions
 
-#### Scenario: Missing branch without a terminal
-- **WHEN** a name is missing without a TTY
+#### Scenario: Missing worktree name without a terminal
+- **WHEN** both a name and --branch are missing without a TTY
 - **THEN** the command fails without a session
 
 #### Scenario: Cancel creation
@@ -41,7 +41,11 @@ In Git, create SHALL prompt only for a missing required branch name in a TTY and
 - **THEN** no new session is created
 
 ### Requirement: Background creation result
-create SHALL assign the session to the section for its exact calling directory, adding that section when needed. It SHALL start an active background terminal, print the branch, path and selected template and return control. Copying SHALL report its source and file count. shell SHALL be the built-in default; explicit or configured templates SHALL run their commands after registration. Successful create SHALL mean terminal creation, not application success.
+create SHALL assign the session to the section for its exact calling directory, adding that section when needed. It SHALL start an active background terminal, print the session name, path and selected template and return control. Copying SHALL report its source and file count. shell SHALL be the built-in default; explicit or configured templates SHALL run their commands after registration. Successful create SHALL mean terminal creation, not application success.
+
+#### Scenario: Explicit branch and optional matching name
+- **WHEN** create receives --branch feat/login
+- **THEN** it creates or attaches the branch and uses feat/login as the worktree name unless the caller supplied a separate name
 
 #### Scenario: Successful creation
 - **WHEN** create succeeds
@@ -53,7 +57,7 @@ create SHALL assign the session to the section for its exact calling directory, 
 - **THEN** the result includes the source and copied file count
 
 ### Requirement: Global grouped listing
-list SHALL show active and stopped sessions from all known groups from any directory, including running legacy source sessions, without registering source worktrees automatically. The table SHALL include group, public ID, name, type, activity, terminals, agent and path. Unavailable groups SHALL be reported to stderr with nonzero exit status; stdout SHALL preserve healthy records and valid JSON.
+list SHALL show active and stopped sessions from all known groups from any directory, including running legacy source sessions, without registering source worktrees automatically. The table SHALL include group, public ID, name, current branch, type, activity, terminals, agent and path. Unavailable groups SHALL be reported to stderr with nonzero exit status; stdout SHALL preserve healthy records and valid JSON.
 
 #### Scenario: Same global list from another directory
 - **WHEN** list runs from another directory or worktree
@@ -67,12 +71,12 @@ list SHALL show active and stopped sessions from all known groups from any direc
 - **WHEN** one group is unavailable
 - **THEN** other records appear, the error is reported separately and exit status is nonzero
 
-### Requirement: Branch and global ID lifecycle commands
-start, stop and delete SHALL accept positional public group:session IDs from any directory. Inside Git they SHALL also accept exact current-project branch names; numeric names SHALL remain branches. stop/delete --all SHALL affect only the current Git group or ordinary directory and conflict with a session argument. Confirmations, --yes and worktree protection SHALL remain.
+### Requirement: Worktree name and global ID lifecycle commands
+start, stop and delete SHALL accept positional public group:session IDs from any directory. Inside Git they SHALL also accept exact permanent worktree names in the current project. Numeric names SHALL address a worktree by name. stop/delete --all SHALL affect only the current Git group or ordinary directory and conflict with a session argument. Confirmations, --yes and worktree protection SHALL remain.
 
-#### Scenario: Numeric branch and composite ID
+#### Scenario: Numeric worktree name and composite ID
 - **WHEN** delete receives 1 inside Git or 3:7 from another directory
-- **THEN** the first addresses current-project branch 1 and the second a specific record in group 3
+- **THEN** the first addresses current-project worktree named 1 and the second a specific record in group 3
 
 #### Scenario: Noninteractive bulk operation
 - **WHEN** stop --all or delete runs without a TTY and without --yes
@@ -97,7 +101,7 @@ template list [--json] and template show <name> SHALL work inside and outside Gi
 - **THEN** the definition source and commands YAML are available without launching an application
 
 #### Scenario: Explicit recovery template
-- **WHEN** a saved template is unavailable and start <branch> --template shell runs
+- **WHEN** a saved template is unavailable and start <name> --template shell runs
 - **THEN** the stopped session saves shell and starts as a plain shell
 
 ### Requirement: Actionable runtime dependency diagnostics
@@ -113,6 +117,10 @@ Git operations SHALL check Git 2.31+; terminal creation/opening SHALL check tmux
 
 ### Requirement: Global public session JSON
 JSON SHALL add id (a group:session string), name, kind and workspace to existing session fields. kind SHALL be source/worktree/terminal/temporary; workspace SHALL contain id/type/name/path. branch/base SHALL be empty strings for persistent plain terminals and temporary records, including kind=terminal in a Git workspace. temporary SHALL denote a live temporary terminal. description SHALL be absent; machine fields and codes SHALL remain English.
+
+#### Scenario: Checkout changes
+- **WHEN** list --json reads a named worktree after git switch
+- **THEN** name and base retain the worktree name and original commit, and branch reports the new checkout or an empty string for detached HEAD
 
 #### Scenario: Public record shape
 - **WHEN** list --json prints a record

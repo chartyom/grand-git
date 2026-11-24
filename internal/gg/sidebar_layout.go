@@ -128,6 +128,10 @@ func (m sidebar) footer(width int) textCanvas {
 			}
 			c.buttons(buttons...)
 		}
+	} else if job := m.job(target); job != nil {
+		if job.Phase == "failed" {
+			c.buttons(shortcut{"Enter", m.cfg.text("Retry", "Повторить")})
+		}
 	} else if target != nil || !m.direct {
 		c.buttons(shortcut{"Enter", m.cfg.text("Open", "Открыть")}, shortcut{"N", m.cfg.text("New", "Новая")})
 		if t := m.selectedTask(); t != nil && !t.Protected {
@@ -174,6 +178,14 @@ func (m sidebar) details(width int) []string {
 			kind = m.cfg.text("directory", "директория")
 		}
 		pair(m.cfg.text("Folder", "Папка"), kind)
+	} else if job := m.job(target); job != nil {
+		lines = append(lines, dim.Render(pathTail(job.Path, width)))
+		pair(m.cfg.text("Status", "Состояние"), m.phaseLabel(job.Phase))
+		if job.Phase == "failed" {
+			for _, line := range strings.Split(ansi.Wrap(localizeError(oneLine(job.Error), m.cfg.Language), width, ""), "\n") {
+				lines = append(lines, danger.Render(line))
+			}
+		}
 	} else if t, err := m.findTask(target.Group, target.ID); err == nil {
 		lines = append(lines, dim.Render(pathTail(t.Path, width)))
 		pair(m.cfg.text("Terminals", "Терминалы"), strconv.Itoa(len(m.taskSnapshot(t).task(t.ID).live())))
@@ -185,6 +197,16 @@ func (m sidebar) details(width int) []string {
 			git = map[string]string{"clean": "чисто", "modified": "изменено", "unknown": "неизвестно"}[git]
 		}
 		pair("Git", git)
+		if !t.plain() {
+			label := m.cfg.text("Branch", "Ветка")
+			branch, known := m.gitSnapshot(t).Branches[strconv.Itoa(t.ID)]
+			if !known {
+				branch = m.cfg.text("unknown", "неизвестно")
+			} else if branch == "" {
+				branch = m.cfg.text("detached", "без ветки")
+			}
+			pair(label, ansi.Truncate(oneLine(branch), max(1, width-ansi.StringWidth(label)-2), "…"))
+		}
 		open := m.cfg.text("no", "нет")
 		if target.Group == m.openGroup() && target.ID == m.task {
 			open = m.cfg.text("yes", "да")
@@ -262,7 +284,7 @@ func (m sidebar) renderBase() (string, []hit) {
 func (m sidebar) listCanvas(width, budget int) textCanvas {
 	full := textCanvas{width: width}
 	selected := m.selectedTarget()
-	selectedLine, heading := 0, 0
+	selectedLine, heading, rowCount := 0, 0, 0
 	for _, item := range m.items() {
 		same := selected != nil && *selected == item
 		if item.Folder {
@@ -284,17 +306,22 @@ func (m sidebar) listCanvas(width, budget int) textCanvas {
 			}
 			continue
 		}
-		t, err := m.findTask(item.Group, item.ID)
-		if err != nil {
-			continue
-		}
 		if same {
 			selectedLine = len(full.lines)
 		}
+		var line string
+		if job := m.job(&item); job != nil {
+			line = m.worktreeJobLine(job, same, width)
+		} else if t, err := m.findTask(item.Group, item.ID); err == nil {
+			line = m.sessionLine(t, same, width)
+		} else {
+			continue
+		}
 		full.hits = append(full.hits, hit{x2: width, y: len(full.lines), row: true, group: item.Group, id: item.ID})
-		full.add(m.sessionLine(t, same, width))
+		full.add(line)
+		rowCount++
 	}
-	if len(m.rows()) == 0 {
+	if rowCount == 0 {
 		full.add(dim.Render(m.cfg.text("No matching sessions", "Нет подходящих сессий")))
 	}
 	start := max(0, selectedLine-budget+1)

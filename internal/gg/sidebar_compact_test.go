@@ -77,10 +77,28 @@ func TestSearchThresholdUsesCandidatesAndResetsOnShrink(t *testing.T) {
 	}
 }
 
+func TestSearchFollowsCurrentBranchAndStableName(t *testing.T) {
+	m := compactFixture(t, 11)
+	m.git.Branches = map[string]string{"1": "feat/login"}
+	m.query = "feat/login"
+	rows := m.rows()
+	if len(rows) != 1 || rows[0].ID != 1 {
+		t.Fatalf("branch search returned %v", rows)
+	}
+	m.git.Branches["1"] = ""
+	if len(m.rows()) != 0 {
+		t.Fatal("branch still matched after detaching")
+	}
+	m.query = "task-01"
+	if rows := m.rows(); len(rows) != 1 || rows[0].ID != 1 {
+		t.Fatal("detaching hid the stable name")
+	}
+}
+
 func TestSidebarUsesReadableSessionDetailsWithoutHeaderOrRowCodes(t *testing.T) {
 	m := compactFixture(t, 2)
 	m.width = 42
-	m.git = map[string]string{"1": "modified"}
+	m.git = gitCache{States: map[string]string{"1": "modified"}}
 	view, _ := m.render()
 	view = regexp.MustCompile(` +`).ReplaceAllString(ansi.Strip(view), " ")
 	for _, old := range []string{"GRAND GIT", "All sessions", "1T", " ‹", " ↻"} {

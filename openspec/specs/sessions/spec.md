@@ -7,14 +7,18 @@ Define parallel task isolation, base branch selection, terminal persistence and 
 ## Requirements
 
 ### Requirement: Independent worktrees and bases
-In Git, every create task SHALL have a separate worktree and an active background terminal using the selected template. New branches SHALL start from the current HEAD or an explicit base. Existing free branches SHALL attach without moving their commit; combining an existing branch with --base SHALL be rejected.
+Git creation SHALL start a separate worktree and background terminal with the selected template. It SHALL default to detached HEAD at the calling HEAD or explicit base. Only --branch SHALL create a branch at that commit or attach an existing one. Existing free branches SHALL attach without moving their commit; combining an existing branch with --base SHALL be rejected.
+
+#### Scenario: Three worktrees at one commit
+- **WHEN** clone1, clone2 and clone3 are created without --branch and the user runs git switch -c feat/login in clone1
+- **THEN** only clone1 checks out feat/login, all three trees retain their names and paths, and their running terminals keep their processes
 
 #### Scenario: Tasks from main and release
 - **WHEN** tasks use `--base main` and `--base release/demo` pointing to different commits
 - **THEN** each task's worktree contents match its own base
 
 #### Scenario: Branch already checked out
-- **WHEN** the requested branch is used by another worktree
+- **WHEN** the explicitly requested branch is used by another worktree
 - **THEN** creation fails without switching that worktree
 
 ### Requirement: Worktree checkout hooks
@@ -29,7 +33,7 @@ Creation SHALL wait for Git to finish adding the worktree and return after the t
 - **THEN** creation reports the hook diagnostic and rolls back both the worktree and new branch
 
 ### Requirement: Stable project registry
-Git tasks SHALL use <git-common-dir>/grand-git for their registry and service data and SHALL have unique branches and stable internal IDs. New records SHALL use increasing positive IDs; legacy IDs, including source 0, SHALL persist while registered. Ordinary/temporary names SHALL not reserve branches. Discovery SHALL NOT register source worktrees. Concurrent creates SHALL allocate unique IDs. Failure before startup commands SHALL roll back new records and created Git objects.
+Git tasks SHALL use <git-common-dir>/grand-git for their registry and service data and SHALL have unique worktree names and stable internal IDs. New records SHALL use increasing positive IDs; legacy IDs, including source 0, SHALL persist while registered. Ordinary/temporary names SHALL not reserve worktree names. Discovery SHALL NOT register source worktrees. Concurrent creates SHALL allocate unique IDs. Failure before startup commands SHALL roll back new records and created Git objects.
 
 #### Scenario: Concurrent creation
 - **WHEN** several processes create different tasks concurrently
@@ -43,6 +47,17 @@ Git tasks SHALL use <git-common-dir>/grand-git for their registry and service da
 - **WHEN** a registry without a source record is opened
 - **THEN** no source record is added and existing IDs and processes remain unchanged
 
+### Requirement: Concurrent worktree preparation
+Git worktree creation SHALL reserve its destination and section before checkout. Checkout and ignored file copying SHALL allow independent actions in the same and other workspaces. The managed copy source SHALL be protected from removal while needed. Session listing and startup commands SHALL use committed records. Failed preparation SHALL release its reservation and roll back owned artifacts.
+
+#### Scenario: Independent activity during copying
+- **WHEN** an ignored tree is being copied and a second client starts an existing session or creates another worktree
+- **THEN** independent operations can complete before the copy ends and concurrent reservations cannot claim the same destination
+
+#### Scenario: Removal during preparation
+- **WHEN** the target section would otherwise be empty or the copy source is a managed worktree
+- **THEN** removing that section or deleting the source cannot invalidate an in-flight creation
+
 ### Requirement: Persistent terminals
 Switching and detach SHALL preserve user processes and the dashboard PID. Q and disconnection SHALL preserve persistent records and processes. Legacy clients SHALL clean only their own temporary records. Stopped managed and ordinary records SHALL remain registered; reopening SHALL run the saved template as a new process, not resume the former agent.
 
@@ -55,7 +70,12 @@ Switching and detach SHALL preserve user processes and the dashboard PID. Q and 
 - **THEN** list retains tasks with stopped status and the dashboard can reopen them
 
 ### Requirement: Protected deletion with branch preservation
-`delete <branch>` SHALL stop terminals and remove the worktree while preserving the Git branch. Without `--force`, user-modified and untracked files SHALL block deletion. Unmodified integration-generated files MAY be removed; this check does not protect Git-ignored files.
+`delete <name>` SHALL stop terminals and remove the worktree while preserving the Git branch. Without `--force`, user-modified and untracked files SHALL block deletion. Unmodified integration-generated files MAY be removed; this check does not protect Git-ignored files.
+
+#### Scenario: Detached commit outside branch and tag history
+- **WHEN** a managed worktree has a detached HEAD outside the history of local branches, remote-tracking branches and tags
+- **THEN** single and bulk delete SHALL require --force and explain how to save the commit on a branch
+- **AND** the preflight SHALL check every target before stopping terminals and repeat the protection check before removing each worktree
 
 #### Scenario: Dirty worktree
 - **WHEN** a task has user changes and delete runs without `--force`
@@ -120,15 +140,15 @@ Source and external worktree directories SHALL never be removed through gg, incl
 - **WHEN** the user calls delete on a source record with --force --yes
 - **THEN** the command refuses to remove its directory, branch or terminals
 
-### Requirement: Branch-named worktree paths
-New worktrees SHALL use <project>__sessions/<branch>, retaining branch separators. Existing paths SHALL persist, including legacy numeric directories. Occupied directories, symlinks in parent paths and duplicate session names SHALL be rejected without overwriting.
+### Requirement: Named worktree paths
+New worktrees SHALL live directly under <project>__sessions, substituting ~ for every / in the permanent worktree name. Names over 255 bytes SHALL use ~ and the hex SHA-256 of the full name. Names SHALL stay stable across checkout changes. Legacy worktrees SHALL retain their creation names and paths, including nested and numeric directories. Occupied directories, symlinks in parent paths and duplicate session names SHALL be rejected without overwriting.
 
-#### Scenario: Nested branch and duplicate
+#### Scenario: Nested name and duplicate
 - **WHEN** feat/feat1 is created and the same name is requested again
-- **THEN** the first directory is at __sessions/feat/feat1 and repeated creation is rejected even after stop
+- **THEN** the first directory is at __sessions/feat~feat1 and repeated creation is rejected even after stop
 
 #### Scenario: Legacy active worktree
-- **WHEN** a project with a legacy numeric path is upgraded
+- **WHEN** a project with a nested branch path or a legacy numeric path is upgraded
 - **THEN** its path, internal ID and running process remain
 
 #### Scenario: Symlink or occupied path
@@ -247,7 +267,7 @@ Sections SHALL have stable increasing internal IDs, workspace references and can
 
 #### Scenario: CLI creation from a subdirectory
 - **WHEN** gg create runs from a Git subdirectory or managed worktree directory
-- **THEN** the new session belongs to that exact directory's section while its managed worktree uses the existing project__sessions/branch path scheme
+- **THEN** the new session belongs to that exact directory's section while its managed worktree is a direct child of project__sessions
 
 #### Scenario: Stopped record prevents section removal
 - **WHEN** a section contains a stopped persistent session

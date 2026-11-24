@@ -1,6 +1,7 @@
 package gg
 
 import (
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -28,6 +29,14 @@ func (m sidebar) items() []listTarget {
 			if t.Group == g.View.ID {
 				entries = append(entries, listTarget{Group: t.Group, ID: t.ID})
 			}
+		}
+		if !m.onlyActive && g.Err == nil && len(g.Jobs) != 0 {
+			for _, job := range g.Jobs {
+				if m.query == "" || strings.Contains(strings.ToLower(job.Name+" "+job.Branch+" "+g.View.Name+" "+g.View.Path), strings.ToLower(m.query)) {
+					entries = append(entries, listTarget{Group: g.View.ID, ID: job.ID})
+				}
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
 		}
 		if len(entries) > 0 || g.Err != nil || (m.query == "" && !m.onlyActive) {
 			items = append(items, listTarget{Group: g.View.ID, Folder: true})
@@ -66,6 +75,9 @@ func (m sidebar) actionTarget() *listTarget {
 }
 
 func (m *sidebar) openActions(target *listTarget, anchor *screenPoint) {
+	if job := m.job(target); anchor != nil && job != nil && job.Phase != "failed" {
+		return
+	}
 	m.modal, m.actionIndex = "actions", 0
 	m.menuTarget, m.menuAnchor = target, anchor
 	m.searching = false
@@ -82,8 +94,14 @@ func (m *sidebar) beginConfirmation(action string, target listTarget) {
 		m.confirmWorkspace, m.confirmSection = g.workspaceID(), g.Section
 	}
 	m.confirmAction = action
+	m.hover = nil
 	if target.Folder {
 		if g := m.group(target.Group); g != nil && g.Err == nil && g.State != nil {
+			if action == "relative-paths" {
+				m.confirmName = g.Project.Root
+				m.confirming = true
+				return
+			}
 			m.confirmName = g.View.Name
 			for _, t := range g.State.Tasks {
 				if action == "delete" || len(g.Snap.task(t.ID).live()) > 0 {
@@ -96,7 +114,6 @@ func (m *sidebar) beginConfirmation(action string, target listTarget) {
 		m.confirmName = m.displayName(t)
 	}
 	m.confirming = len(m.confirmIDs) > 0
-	m.hover = nil
 }
 
 func (m sidebar) dispatch(key string, target *listTarget) (tea.Model, tea.Cmd) {
@@ -106,7 +123,8 @@ func (m sidebar) dispatch(key string, target *listTarget) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if target.Folder {
-			if m.group(target.Group) == nil {
+			g := m.group(target.Group)
+			if g == nil {
 				m.message = m.cfg.text("Section no longer exists", "Раздел больше не существует")
 				return m, nil
 			}
@@ -118,13 +136,23 @@ func (m sidebar) dispatch(key string, target *listTarget) (tea.Model, tea.Cmd) {
 			case "t":
 				return m.perform(popupAction{Kind: "terminal", Workspace: target.Group, ID: -1, Folder: true})
 			case "x":
-				if g := m.group(target.Group); g != nil && g.Section > 0 && g.State != nil && len(g.State.Tasks) == 0 {
+				if g.Section > 0 && g.State != nil && len(g.State.Tasks) == 0 && !g.hasPendingWorktree() {
 					return m.perform(popupAction{Kind: "remove-section", Workspace: target.Group, Folder: true})
+				}
+			case "r":
+				if m.direct && g.Section > 0 && g.View.Type == "git" {
+					m.beginConfirmation("relative-paths", *target)
 				}
 			case "s":
 				m.beginConfirmation("stop", *target)
 			case "d":
 				m.beginConfirmation("delete", *target)
+			}
+			return m, nil
+		}
+		if job := m.job(target); job != nil {
+			if key == "enter" && job.Phase == "failed" {
+				return m.perform(popupAction{Kind: "retry-worktree", Workspace: target.Group, ID: target.ID})
 			}
 			return m, nil
 		}

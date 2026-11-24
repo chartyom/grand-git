@@ -1,6 +1,7 @@
 package gg
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -96,20 +97,44 @@ func TestSuccessNoticeExpiresWithoutRefreshExtension(t *testing.T) {
 }
 
 func TestTemporaryPresentationAndJSONPreserveBranchIdentity(t *testing.T) {
-	p := &Project{Dir: t.TempDir()}
-	task := &Task{ID: 0, Branch: "main", Protected: true}
+	dir := t.TempDir()
+	if _, err := command(dir, "git", "init", "-b", "main"); err != nil {
+		t.Fatal(err)
+	}
+	p := &Project{Root: dir, Dir: dir}
+	task := &Task{ID: 0, Path: dir, Branch: "main", Protected: true}
 	m := sidebar{p: p, cfg: defaults(), width: 60, height: 30, state: &State{Tasks: []*Task{task}},
 		snap: Snapshot{{ID: "%1", Task: "0", Generation: "launch"}}}
 	if !strings.Contains(m.View().Content, "dashboard") {
 		t.Fatal(m.View().Content)
 	}
-	rows := p.sessionViews(m.state, m.snap)
+	rows, err := p.sessionViews(m.state, m.snap)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if rows[0].Branch != "main" || !rows[0].Temporary {
 		t.Fatal(rows)
 	}
 	m.snap[0].Dead = true
-	if p.sessionViews(m.state, m.snap)[0].Temporary {
+	rows, err = p.sessionViews(m.state, m.snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].Temporary {
 		t.Fatal("dead terminal is temporary")
+	}
+}
+
+func TestSessionListSkipsRecordsDeletedAfterItsSnapshot(t *testing.T) {
+	p := &Project{Dir: t.TempDir()}
+	removed := &Task{ID: 1, Branch: "clone1", Path: filepath.Join(p.Dir, "missing")}
+	stale := &State{NextID: 2, Tasks: []*Task{removed}}
+	if err := atomicJSON(filepath.Join(p.Dir, "state.json"), &State{NextID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := p.sessionViews(stale, nil)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("retired record in listing: %v, %v", rows, err)
 	}
 }
 
@@ -124,6 +149,75 @@ func TestDependencyVersions(t *testing.T) {
 	} {
 		if got := versionAtLeast(test.value, test.minimum); got != test.want {
 			t.Errorf("%q: %v", test.value, got)
+		}
+	}
+}
+func TestRelativePathActionBindsGitProject(t *testing.T) {
+	m := designFixture(t)
+	g := &m.groups[0]
+	g.Workspace, g.Section = 7, g.View.ID
+	g.Project = &Project{Root: "/fixture/repo", WorkspaceID: g.Workspace}
+	g.View.Path = "/fixture/repo/subdir"
+	g.State = &State{}
+	other := &m.groups[1]
+	other.Section, other.View.Type = other.View.ID, "directory"
+
+	// Open the Git section's pointer menu with a different project active.
+	target := listTarget{Group: g.Section, Folder: true}
+	h := rowHit(t, m, target)
+	next, _ := m.Update(tea.MouseClickMsg{Button: tea.MouseRight, X: h.x1, Y: h.y})
+	m = next.(sidebar)
+	stale := m
+	stale.groups = m.groups[1:]
+	closed, cmd := stale.Update(commandKey("enter"))
+	if cmd != nil || closed.(sidebar).modal != "" || closed.(sidebar).confirming {
+		t.Fatal("a removed section remained actionable")
+	}
+	m.selectTarget(listTarget{Group: other.Section, Folder: true})
+	click := func(s sidebar, key string) (tea.Model, tea.Cmd) {
+		for _, h := range s.dialogOverlay(s.screenWidth, s.screenHeight).hits {
+			if h.key == key {
+				return s.Update(tea.MouseClickMsg{Button: tea.MouseLeft, X: h.x1, Y: h.y})
+			}
+		}
+		t.Fatalf("missing dialog control %q", key)
+		return nil, nil
+	}
+	next, cmd = click(m, "R")
+	m = next.(sidebar)
+	if !m.confirming || cmd != nil {
+		t.Fatal("an empty Git section must offer confirmation before changing paths")
+	}
+	for _, locale := range []string{"en", "ru"} {
+		m.cfg.Language = locale
+		body, _ := m.dialog(90, 24)
+		if !strings.Contains(body, g.Project.Root) || !strings.Contains(body, "2.48") {
+			t.Fatalf("missing project or compatibility requirement in %s: %s", locale, body)
+		}
+	}
+	cancelled, cmd := click(m, "N/Esc")
+	if cancelled.(sidebar).confirming || cmd != nil {
+		t.Fatal("cancel dispatched the project action")
+	}
+	next, cmd = click(m, "Y")
+	if cmd == nil || next.(sidebar).confirming {
+		t.Fatal("confirm failed to dispatch the project action")
+	}
+	a := cmd().(directActionMsg).action
+	if a.Kind != "relative-paths" || a.Workspace != g.Workspace || a.Section != g.Section {
+		t.Fatalf("confirmation changed target: %+v", a)
+	}
+	for _, target := range []listTarget{{Group: other.Section, Folder: true}, {Group: other.Section, ID: 1}} {
+		if !target.Folder {
+			other.View.Type = "git"
+		}
+		m = next.(sidebar)
+		m.selectTarget(target)
+		m.openActions(&target, nil)
+		for _, shortcut := range m.shortcuts() {
+			if shortcut.key == "R" {
+				t.Fatalf("unexpected project action on %+v", target)
+			}
 		}
 	}
 }

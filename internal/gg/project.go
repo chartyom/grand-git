@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +30,7 @@ type Task struct {
 	RunToken    string            `json:"run_token,omitempty"`
 	Group       int               `json:"-"`
 	ID          int               `json:"id"`
-	Branch      string            `json:"branch"`
+	Branch      string            `json:"branch"` // Stable worktree name under its historical registry key.
 	Base        string            `json:"base"`
 	Path        string            `json:"path"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -64,31 +63,6 @@ func command(dir, name string, args ...string) (string, error) {
 		return "", fmt.Errorf("%s: %s: %w", name, strings.TrimSpace(string(b)), err)
 	}
 	return strings.TrimRight(string(b), "\r\n"), nil
-}
-
-func addWorktree(dir string, args ...string) error {
-	// A checkout hook can leave a background process holding Git's output
-	// descriptors. A regular file lets Run wait for Git itself and still
-	// preserves diagnostics from both Git and the hook on failure.
-	output, err := os.CreateTemp("", "gg-worktree-*")
-	if err != nil {
-		return err
-	}
-	defer output.Close()
-	if err := os.Remove(output.Name()); err != nil {
-		return err
-	}
-	cmd := commandIn(dir, "git", args...)
-	cmd.Stdout, cmd.Stderr = output, output
-	if err := cmd.Run(); err != nil {
-		info, statErr := output.Stat()
-		if statErr != nil {
-			return fmt.Errorf("git: %w", err)
-		}
-		b, _ := io.ReadAll(io.NewSectionReader(output, 0, info.Size()))
-		return fmt.Errorf("git: %s: %w", strings.TrimSpace(string(b)), err)
-	}
-	return nil
 }
 
 func Discover(dir string) (*Project, error) {
@@ -238,144 +212,39 @@ func taskByID(s *State, id int) (*Task, error) {
 	return nil, errors.New("session no longer exists")
 }
 
-func (p *Project) Create(cwd, branch, base string, skipCopy bool, template ...string) (*Task, error) {
-	return p.withCreationSection(cwd, func(target *Project) (*Task, error) {
-		return target.createTask(cwd, branch, base, skipCopy, template...)
-	})
-}
-
-func (p *Project) createTask(cwd, branch, base string, skipCopy bool, template ...string) (*Task, error) {
+func (p *Project) Create(cwd, name, branch, base string, skipCopy bool, template ...string) (*Task, error) {
 	if p.Directory {
+		if branch != "" {
+			return nil, errors.New(p.text("--branch requires a Git repository", "--branch доступен только в Git"))
+		}
 		if base != "" || skipCopy {
 			return nil, errors.New("--base and --no-copy require a Git repository")
 		}
-		return p.createTerminalRecord(cwd, branch, false, "", template...)
+		return p.createTerminal(cwd, name, false, "", template...)
 	}
-	if err := checkDependency("tmux", "3.4"); err != nil {
-		return nil, err
+	tpl := ""
+	if len(template) != 0 {
+		tpl = template[0]
 	}
-	cfg, err := p.settings()
+	job, lease, err := p.reserveWorktree(cwd, name, branch, base, tpl, skipCopy, false, 0)
 	if err != nil {
 		return nil, err
 	}
-	name := cfg.DefaultTemplate
-	if len(template) > 0 && template[0] != "" {
-		name = template[0]
+	defer lease.Close()
+	return p.provisionWorktree(job, lease)
+}
+
+func worktreeDirName(name string) string {
+	// Worktree names use Git's branch-name syntax, which reserves ~.
+	if len(name) > 255 {
+		return fmt.Sprintf("~%x", sha256.Sum256([]byte(name)))
 	}
-	tpl, err := p.resolveTemplate(name)
-	if err != nil {
-		return nil, err
-	}
-	if err = validateTemplateShell(tpl); err != nil {
-		return nil, err
-	}
-	branch = strings.TrimSpace(branch)
-	if normalized, err := command(cwd, "git", "check-ref-format", "--branch", branch); err != nil || normalized != branch || branch == "HEAD" {
-		return nil, fmt.Errorf(p.text("invalid branch name %q", "недопустимое имя ветки %q"), branch)
-	}
-	var created *Task
-	err = p.transaction(func(s *State) error {
-		for _, t := range s.Tasks {
-			if t.Branch == branch {
-				return fmt.Errorf(p.text("session %q already exists; use start or dashboard", "сессия %q уже существует; используйте start или dashboard"), branch)
-			}
-		}
-		_, branchErr := command(cwd, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
-		exists := branchErr == nil
-		if exists && base != "" {
-			return errors.New("--base cannot be used with an existing branch")
-		}
-		source := ""
-		if !skipCopy {
-			var err error
-			source, err = p.copySource(cwd, base)
-			if err != nil {
-				return err
-			}
-		}
-		if exists {
-			base = "refs/heads/" + branch
-		} else if base == "" {
-			base = "HEAD"
-		}
-		baseCommit, err := command(cwd, "git", "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
-		if err != nil {
-			return fmt.Errorf("cannot resolve base commit: %w", err)
-		}
-		path := filepath.Join(p.Root+"__sessions", branch)
-		if err := safeSessionParents(p.Root+"__sessions", path); err != nil {
-			return err
-		}
-		if _, err := os.Lstat(path); err == nil {
-			return fmt.Errorf(p.text("session directory already exists: %s", "каталог сессии уже существует: %s"), path)
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		args := []string{"worktree", "add"}
-		if !exists {
-			args = append(args, "-b", branch)
-		}
-		args = append(args, "--", path)
-		if exists {
-			args = append(args, branch)
-		} else {
-			args = append(args, baseCommit)
-		}
-		t := &Task{ID: s.NextID, SectionID: p.SectionID, Branch: branch, Base: baseCommit, Path: path, CreatedAt: time.Now().UTC(), Template: name}
-		rollback := func() {
-			p.killTask(t.ID)
-			if t.LaunchToken != "" {
-				_ = os.Remove(p.launchPath(t.LaunchToken))
-			}
-			_ = commandIn(p.Root, "git", "worktree", "remove", "--force", "--", path).Run()
-			if !exists {
-				_ = commandIn(p.Root, "git", "branch", "-D", "--", branch).Run()
-			}
-		}
-		if err := addWorktree(p.Root, args...); err != nil {
-			// Git may finish registration and checkout before a project hook
-			// fails. Only clean up a worktree of the requested branch at the
-			// previously absent destination, never an unrelated occupied path.
-			actual, _ := command(path, "git", "symbolic-ref", "--quiet", "--short", "HEAD")
-			if actual == branch && p.validateWorktree(t) == nil {
-				rollback()
-			}
-			return err
-		}
-		if !skipCopy {
-			count, err := copyIgnored(source, path)
-			if err != nil {
-				rollback()
-				return fmt.Errorf("cannot copy environment: %w", err)
-			}
-			t.CopySource, t.CopiedFiles = source, count
-		}
-		if s.HooksEnabled {
-			if err := p.installHooks(path); err != nil {
-				rollback()
-				return err
-			}
-			t.Generated = hookHashes(path)
-		}
-		if err := p.ensureServer(); err != nil {
-			rollback()
-			return err
-		}
-		if err := p.ensureTask(t); err != nil {
-			rollback()
-			return err
-		}
-		s.Tasks = append(s.Tasks, t)
-		s.NextID++
-		// Persist before returning, so rollback also covers registry write failures.
-		if err := atomicJSON(filepath.Join(p.Dir, "state.json"), s); err != nil {
-			rollback()
-			return err
-		}
-		created = t
-		return nil
-	}, false)
-	return created, err
+	return strings.ReplaceAll(name, "/", "~")
+}
+
+func validGitName(cwd, name string) bool {
+	normalized, err := command(cwd, "git", "check-ref-format", "--branch", name)
+	return err == nil && normalized == name && name != "HEAD"
 }
 
 func (p *Project) Delete(id int, force bool) error {

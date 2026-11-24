@@ -35,27 +35,31 @@ If `gg` opens Git GUI or reports a missing `gui` command, check for a [shell ali
 gg dashboard                 # open saved folder sections and sessions
 ```
 
-Press +, choose a directory and confirm with Ctrl+S. On that section, press T for a plain shell or N to create a session. In Git, enter a branch name and press Enter to open the new task in its own worktree. Ctrl+W cycles through the list and terminal panes; Enter opens the selected session. The same gg dashboard process stays open when switching projects.
+Press +, choose a directory and confirm with Ctrl+S. On that section, press T for a plain shell or N to create a session. In a Git project, enter a worktree name such as `clone1` and press Enter to start at detached HEAD. Inside its terminal, use `git switch -c feat/login` to create a branch or `git switch release` to switch to an available local branch. The row and directory keep the name `clone1`. Ctrl+W cycles through the list and terminal panes; Enter opens the selected session. The same gg dashboard process stays open when switching projects.
 
 You can also create tasks from the command line. This example uses a Git working directory with a commit on `main`.
 
 ```sh
-gg create feat/login         # worktree + background shell
-gg create fix/release --base main
+gg create clone1             # detached worktree + background shell
+gg create clone2 --base main
+gg create clone3 --branch fix/release
 gg list
 ```
 
-New worktrees live at `<project>__sessions/<branch>`. Ignored local files such as `.env` and `node_modules` are copied independently; `--no-copy` skips copying. Outside Git, `gg create [name]` creates a terminal in the current folder. `gg` without a command shows help.
+`gg create feat/login` creates `<project>__sessions/feat~login`. Existing sessions keep their saved paths. Ignored local files such as `.env` and `node_modules` are copied independently; `--no-copy` skips copying. Outside Git, `gg create [name]` creates a terminal in the current folder. `gg` without a command shows help.
 
 ## Dashboard
 
 The sidebar groups sessions under selectable folder sections. Worktrees (`⎇`) and plain terminals (`>_`) share one list in creation order. A single click opens or starts a session; hovering previews details without switching terminals. `●` / `○` indicates running / stopped terminals; `▸` marks the open terminal independently of the highlighted selection. Details show the path, terminal count, agent and Git state.
+
+Submitting a new Git worktree shows an animated row immediately. You can use another terminal or quit with Q while `node_modules` copies. Stay on the row to open its terminal automatically when ready, or switch away to keep working elsewhere.
 
 | In the session list | Key |
 | --- | --- |
 | Select / open | ↑↓ or J/K / Enter or single click |
 | Add a folder section / remove an empty section | + / X |
 | New session | N |
+| Enable relative worktree links for a shared Git project (Git 2.48+ on every client) | R on its folder |
 | Actions and shortcuts | Right-click, ? or Shift+F10 |
 | Search, when the list has more than 10 sessions | / |
 | All / active sessions | A |
@@ -73,12 +77,12 @@ Press Q in the list to close the dashboard. Its persistent terminals keep runnin
 ## Stop and remove
 
 ```sh
-gg stop feat/login           # end processes; keep the worktree and record
-gg start feat/login          # start a new terminal
-gg delete feat/login --yes   # remove the worktree; keep the Git branch
+gg stop clone1           # end processes; keep the worktree and record
+gg start clone1          # start a new terminal
+gg delete clone1 --yes   # remove the worktree; keep Git branches
 ```
 
-Modified and ordinary untracked files block deletion without explicit `--force`; ignored files are removed with the task worktree. Source and external worktrees are never removed by `gg`. Deleting an ordinary folder session preserves all its files. See [lifecycle safeguards](docs/usage.md#lifecycle-and-safeguards) before bulk operations.
+Modified and ordinary untracked files block deletion without explicit `--force`; ignored files are removed with the task worktree. A detached commit outside the history of branches and tags also requires `--force`. Save it first with `git switch -c <branch>` inside that worktree. Source and external worktrees are never removed by `gg`. Deleting an ordinary folder session preserves all its files. See [lifecycle safeguards](docs/usage.md#lifecycle-and-safeguards) before bulk operations.
 
 ## Alternatives
 

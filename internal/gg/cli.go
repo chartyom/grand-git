@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
+	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -46,19 +48,47 @@ type SessionView struct {
 	Template    string        `json:"template"`
 }
 
-func (p *Project) sessionViews(s *State, snap Snapshot) []SessionView {
-	out := []SessionView{}
-	for _, t := range s.Tasks {
-		live := len(snap.task(t.ID).live())
-		out = append(out, SessionView{ID: p.publicID(t.ID), Name: t.label(), Kind: t.kind(), Workspace: p.workspaceView(), Branch: t.Branch, Base: t.Base, Path: t.Path, CreatedAt: t.CreatedAt, Protected: t.Protected, CopySource: t.CopySource, CopiedFiles: t.CopiedFiles, Active: live > 0, Temporary: (t.Protected || t.Kind == "temporary") && snap.task(t.ID).temporary(), Terminals: live, AgentStatus: p.status(t, snap), Template: t.templateName()})
+func (p *Project) listBranchError(t *Task, err error) error {
+	if _, statErr := os.Stat(filepath.Join(t.Path, ".git")); !errors.Is(statErr, os.ErrNotExist) {
+		return err
 	}
-	return out
+	// Delete removes the checkout under the registry lock, then commits its
+	// removal. A list inside a checkout hook must never wait on that lock.
+	return p.withRegistryLock(unix.LOCK_SH|unix.LOCK_NB, func(latest *State) error {
+		if _, missing := taskByID(latest, t.ID); missing != nil {
+			return nil
+		}
+		return err
+	})
+}
+
+func (p *Project) sessionViews(s *State, snap Snapshot) ([]SessionView, error) {
+	out := []SessionView{}
+	var failures []error
+	for _, t := range s.Tasks {
+		branch, err := t.currentBranch()
+		if err != nil {
+			if err = p.listBranchError(t, err); err != nil {
+				failures = append(failures, fmt.Errorf("%s (%s): %w", t.Path, p.publicID(t.ID), err))
+			}
+			continue
+		}
+		live := len(snap.task(t.ID).live())
+		out = append(out, SessionView{ID: p.publicID(t.ID), Name: t.label(), Kind: t.kind(), Workspace: p.workspaceView(), Branch: branch, Base: t.Base, Path: t.Path, CreatedAt: t.CreatedAt, Protected: t.Protected, CopySource: t.CopySource, CopiedFiles: t.CopiedFiles, Active: live > 0, Temporary: (t.Protected || t.Kind == "temporary") && snap.task(t.ID).temporary(), Terminals: live, AgentStatus: p.status(t, snap), Template: t.templateName()})
+	}
+	return out, errors.Join(failures...)
 }
 
 func newCLI() *cobra.Command {
 	var project *Project
 	var discoveryErr error
 	args := os.Args[1:]
+	if len(args) > 0 && (args[0] == "_prepare-worktree" || args[0] == "_checkout-worktree") {
+		// Keep the worker's inherited lease and acknowledgement pipe private
+		// while the command resolves its workspace with Git.
+		unix.CloseOnExec(3)
+		unix.CloseOnExec(4)
+	}
 	// A dashboard starts with global settings. Service commands resolve their
 	// target via --workspace or --root, independently of the caller's cwd.
 	dashboardLaunch := len(args) == 1 && args[0] == "dashboard" && os.Getenv("GG_TEST_LEGACY_DASHBOARD") != "1"
@@ -79,8 +109,8 @@ func newCLI() *cobra.Command {
 	}
 	root := &cobra.Command{
 		Use: "gg", Short: tr("Parallel Git sessions and persistent terminals", "Параллельные Git-сессии и постоянные терминалы"),
-		Long:         tr("Grand Git — isolated worktrees and persistent terminals for parallel tasks.\n\nCreate sessions in Git projects or ordinary directories; list and dashboard show all known groups.\nstart/stop control activity. delete removes a worktree, preserving its Git branch.\nconfig manages language and templates. init installs local Codex status hooks.\nWithout a command, gg shows this help.", "Grand Git — отдельные worktree и постоянные терминалы для параллельных задач.\n\ncreate создаёт сессию в Git или обычной папке; list и dashboard показывают все группы.\nstart/stop управляют активностью. delete удаляет worktree, сохраняя Git-ветку.\nconfig задаёт язык и шаблоны. init устанавливает локальные хуки Codex.\nБез подкоманды gg показывает справку."),
-		Example:      "  gg create feat/login --base main\n  gg dashboard\n  gg stop feat/login\n  gg start feat/login\n  gg stop --all\n  gg delete feat/login\n  gg config set language ru\n  gg create --help",
+		Long:         tr("Grand Git — isolated worktrees and persistent terminals for parallel tasks.\n\nCreate sessions in Git projects or ordinary directories; list and dashboard show all known groups.\nstart/stop control activity. delete removes a worktree and preserves Git branches.\nconfig manages language and templates. init installs local Codex status hooks.\nWithout a command, gg shows this help.", "Grand Git — отдельные worktree и постоянные терминалы для параллельных задач.\n\ncreate создаёт сессию в Git или обычной папке; list и dashboard показывают все группы.\nstart/stop управляют активностью. delete удаляет worktree и сохраняет Git-ветки.\nconfig задаёт язык и шаблоны. init устанавливает локальные хуки Codex.\nБез подкоманды gg показывает справку."),
+		Example:      "  gg create clone1 --base main\n  gg dashboard\n  gg stop clone1\n  gg start clone1\n  gg stop --all\n  gg delete clone1\n  gg config set language ru\n  gg create --help",
 		SilenceUsage: true, SilenceErrors: true,
 		Version: fmt.Sprintf("%s (commit %s, built %s)", Version, Commit, BuildDate),
 	}
@@ -115,27 +145,43 @@ func newCLI() *cobra.Command {
 		fmt.Fprintln(cmd.OutOrStdout(), tr("Local hooks installed. In Codex, open /hooks, inspect and trust them.", "Проектные хуки установлены. В Codex откройте /hooks, проверьте их и подтвердите доверие."))
 		return nil
 	}}
-	create := &cobra.Command{Use: "create [branch|name]", Short: tr("Create an active session in the background", "Создать активную сессию в фоне"), Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	create := &cobra.Command{Use: "create [name]", Short: tr("Create an active session in the background", "Создать активную сессию в фоне"), Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		p, err := discover()
 		if err != nil {
 			return err
 		}
-		branch := ""
-		if len(args) > 0 {
-			branch = args[0]
+		values := createValues{}
+		values.branch, _ = cmd.Flags().GetString("branch")
+		if cmd.Flags().Changed("branch") {
+			if p.Directory {
+				return errors.New(tr("--branch requires a Git repository", "--branch требует Git-репозитория"))
+			}
+			if strings.TrimSpace(values.branch) == "" {
+				return errors.New(tr("specify a branch name after --branch", "укажите имя ветки после --branch"))
+			}
+			values.name = values.branch
 		}
-		name, _ := cmd.Flags().GetString("template")
+		if len(args) > 0 {
+			values.name = args[0]
+		}
+		base, _ := cmd.Flags().GetString("base")
+		skip, _ := cmd.Flags().GetBool("no-copy")
+		if p.Directory && (cmd.Flags().Changed("base") || cmd.Flags().Changed("no-copy")) {
+			return errors.New("--base and --no-copy require a Git repository")
+		}
+		values.template, _ = cmd.Flags().GetString("template")
 		choose, _ := cmd.Flags().GetBool("choose-template")
 		if cmd.Flags().Changed("template") {
-			if err := validateTemplateName(name); err != nil {
+			if err := validateTemplateName(values.template); err != nil {
 				return err
 			}
 		}
-		if choose && (!term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd()))) {
+		interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+		if choose && !interactive {
 			return errors.New(tr("--choose-template requires an interactive terminal", "--choose-template требует интерактивный терминал"))
 		}
-		if ((!p.Directory && branch == "") || choose) && term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd())) {
-			branch, name, err = promptCreate(p, cfg, branch, name, choose)
+		if interactive && ((!p.Directory && values.name == "") || choose) {
+			values, err = promptCreate(p, cfg, values, choose)
 			if errors.Is(err, errCancelled) {
 				return nil
 			}
@@ -143,15 +189,10 @@ func newCLI() *cobra.Command {
 				return err
 			}
 		}
-		if branch == "" && !p.Directory {
-			return errors.New(tr("specify a branch: gg create <branch>", "укажите имя ветки: gg create <branch>"))
+		if values.name == "" && !p.Directory {
+			return errors.New(tr("specify a worktree name: gg create <name>", "укажите имя worktree: gg create <name>"))
 		}
-		base, _ := cmd.Flags().GetString("base")
-		skip, _ := cmd.Flags().GetBool("no-copy")
-		if p.Directory && (cmd.Flags().Changed("base") || cmd.Flags().Changed("no-copy")) {
-			return errors.New("--base and --no-copy require a Git repository")
-		}
-		t, err := p.Create(".", branch, base, skip, name)
+		t, err := p.Create(".", values.name, values.branch, base, skip, values.template)
 		if err != nil {
 			return err
 		}
@@ -162,9 +203,11 @@ func newCLI() *cobra.Command {
 		}
 		return nil
 	}}
-	create.Long = tr("Create a session in the background and return to your terminal.\n\nInside Git, a branch name is required and a separate worktree is created.\nWithout --base, use the calling HEAD; existing free branches attach without --base.\nOutside Git, create [name] opens a terminal in the current directory; name defaults\nto the directory name and no branch prompt appears. Duplicate terminal names are allowed.\n\nGit worktrees copy ignored local files (.env, .agents, node_modules) by default.\n--no-copy skips copying. A local worktree of --base is the preferred copy source;\notherwise use the calling worktree. --base and --no-copy require Git.", "Создать сессию в фоне и вернуть управление терминалу.\n\nВ Git обязательно имя ветки: создаётся отдельный worktree. Без --base используется\nтекущий HEAD; существующая свободная ветка подключается без --base.\nВне Git create [name] открывает терминал в текущей папке. Имя по умолчанию — имя\nпапки; вопросов о ветке нет. Одинаковые имена обычных терминалов разрешены.\n\nДля worktree по умолчанию копируются игнорируемые файлы (.env, .agents, node_modules).\n--no-copy отключает копирование. Источник — worktree явной --base, если он есть,\nиначе worktree вызова. --base и --no-copy доступны только в Git.")
+	create.Long = tr("Create a session in the background and return to your terminal.\n\nInside Git, create a named worktree with detached HEAD at the calling HEAD or --base.\nUse --branch BRANCH to create a branch or attach an existing free branch.\nAn existing branch cannot be combined with --base. Omitting the worktree name\nwith --branch uses the branch name. Use git switch inside the worktree.\nOutside Git, create [name] opens a terminal in the current directory; name defaults\nto the directory name and no branch prompt appears. Duplicate terminal names are allowed.\n\nGit worktrees copy ignored local files (.env, .agents, node_modules) by default.\n--no-copy skips copying. A local worktree of --base is the preferred copy source;\notherwise use the calling worktree. --branch, --base and --no-copy require Git.", "Создать сессию в фоне и вернуть управление терминалу.\n\nВ Git создаётся именованный worktree без ветки на текущем HEAD или --base.\nОпция --branch ВЕТКА создаёт ветку или подключает существующую свободную.\nДля существующей ветки --base недопустима. Если имя worktree опущено,\nиспользуется имя из --branch. Для смены ветки в worktree выполните git switch.\nВне Git create [name] открывает терминал в текущей папке. Имя по умолчанию — имя\nпапки; вопросов о ветке нет. Одинаковые имена обычных терминалов разрешены.\n\nДля worktree по умолчанию копируются игнорируемые файлы (.env, .agents, node_modules).\n--no-copy отключает копирование. Источник — worktree явной --base, если он есть,\nиначе worktree вызова. --branch, --base и --no-copy доступны только в Git.")
 	create.Long += tr("\n\nThe session belongs to the dashboard section for the exact calling directory;\nthe section is added when needed. Public IDs and workspace grouping stay unchanged.", "\n\nСессия относится к разделу dashboard для точной папки вызова;\nпри необходимости раздел добавляется. Публичные ID и группировка workspace сохраняются.")
-	create.Example = "  gg create feat/login\n  gg create fix/release --base release/1.0\n  gg create feat/clean --no-copy"
+	create.Example = "  gg create clone1\n  gg create clone2 --base release/1.0\n  gg create clone3 --branch feat/login\n  gg create --branch fix/release --no-copy"
+	create.Long += tr("\nFor example, feat/data uses one worktree folder named feat~data.", "\nНапример, для feat/data создаётся одна папка worktree с именем feat~data.")
+	create.Flags().String("branch", "", tr("Git branch to create or attach (default: detached HEAD)", "Ветка для создания или подключения (по умолчанию worktree без ветки)"))
 	create.Flags().String("base", "", tr("Base branch or commit (default: current HEAD)", "Базовая ветка или коммит (по умолчанию текущий HEAD)"))
 	create.Flags().Bool("no-copy", false, tr("Skip Git-ignored environment files", "Не копировать игнорируемые Git файлы окружения"))
 	create.Flags().String("template", "", tr("Startup template (default: default_template setting, then shell)", "Шаблон запуска (по умолчанию default_template, затем shell)"))
@@ -191,7 +234,11 @@ func newCLI() *cobra.Command {
 				failures = append(failures, fmt.Errorf("%s: %w", g.View.Path, g.Err))
 				continue
 			}
-			rows = append(rows, g.Project.sessionViews(g.State, g.Snap)...)
+			groupRows, err := g.Project.sessionViews(g.State, g.Snap)
+			rows = append(rows, groupRows...)
+			if err != nil {
+				failures = append(failures, err)
+			}
 		}
 		asJSON, _ := cmd.Flags().GetBool("json")
 		if asJSON {
@@ -200,14 +247,20 @@ func newCLI() *cobra.Command {
 			}
 		} else {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, tr("GROUP\tID\tNAME\tTYPE\tACTIVE\tTERMINALS\tAGENT\tPATH", "ГРУППА\tID\tИМЯ\tТИП\tАКТИВНА\tТЕРМИНАЛЫ\tАГЕНТ\tПАПКА"))
+			fmt.Fprintln(w, tr("GROUP\tID\tNAME\tBRANCH\tTYPE\tACTIVE\tTERMINALS\tAGENT\tPATH", "ГРУППА\tID\tИМЯ\tВЕТКА\tТИП\tАКТИВНА\tТЕРМИНАЛЫ\tАГЕНТ\tПАПКА"))
 			for _, r := range rows {
 				active := tr("no", "нет")
 				if r.Active {
 					active = tr("yes", "да")
 				}
 				kind := cfg.text(r.Kind, map[string]string{"source": "исходная", "worktree": "задача", "terminal": "терминал", "temporary": "временная"}[r.Kind])
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", oneLine(r.Workspace.Name), r.ID, oneLine(r.Name), kind, active, r.Terminals, p.statusLabel(r.AgentStatus), oneLine(r.Path))
+				branch := r.Branch
+				if r.Kind == "terminal" || r.Kind == "temporary" {
+					branch = "—"
+				} else if branch == "" {
+					branch = tr("detached", "без ветки")
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", oneLine(r.Workspace.Name), r.ID, oneLine(r.Name), oneLine(branch), kind, active, r.Terminals, p.statusLabel(r.AgentStatus), oneLine(r.Path))
 			}
 			if err = w.Flush(); err != nil {
 				return err
@@ -215,10 +268,10 @@ func newCLI() *cobra.Command {
 		}
 		return errors.Join(failures...)
 	}}
-	list.Long = tr("List active and stopped sessions from every known project and directory.\nIDs use group:session, for example gg delete 3:7 --yes. Git branch names still\naddress the current project. An unavailable group is reported on stderr; healthy\nrecords are still printed and the exit status indicates the partial failure.", "Показать активные и остановленные сессии всех известных проектов и папок.\nID имеет вид группа:сессия, например gg delete 3:7 --yes. Имя Git-ветки адресует\nтекущий проект. Недоступная группа сообщается в stderr; исправные записи выводятся,\nкод завершения указывает на неполный результат.")
+	list.Long = tr("List active and stopped sessions from every known project and directory.\nIDs use group:session, for example gg delete 3:7 --yes. Worktree names address sessions\nin the current project across branch switches. An unavailable group is reported on stderr; healthy\nrecords are still printed and the exit status indicates the partial failure.", "Показать активные и остановленные сессии всех известных проектов и папок.\nID имеет вид группа:сессия, например gg delete 3:7 --yes. Имя worktree адресует сессию\nв текущем проекте и сохраняется при смене ветки. Недоступная группа сообщается в stderr; исправные записи выводятся,\nкод завершения указывает на неполный результат.")
 	list.Long += tr("\nSource worktrees are not registered automatically; only running legacy sources remain.", "\nИсходные worktree не регистрируются автоматически; остаются только работающие старые сессии.")
 	list.Flags().Bool("json", false, tr("Print all known sessions with global IDs as JSON", "Вывести все известные сессии с глобальными ID в JSON"))
-	start := &cobra.Command{Use: "start <branch|id>", Short: tr("Start a stopped session without opening dashboard", "Запустить остановленную сессию в фоне"), Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	start := &cobra.Command{Use: "start <name|id>", Short: tr("Start a stopped session without opening dashboard", "Запустить остановленную сессию в фоне"), Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		p, t, err := resolveSession(args[0])
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "session no longer exists") {
@@ -239,21 +292,21 @@ func newCLI() *cobra.Command {
 		return nil
 	}}
 	start.Flags().String("template", "", tr("Change the template of a stopped session before starting", "Сменить шаблон остановленной сессии перед запуском"))
-	start.Long = tr("Accept a branch in the current Git project or a global group:session ID.\nStart using the session's current named template. Active sessions are unchanged.\n--template changes a stopped session's template; it is rejected for an active session.\nUse --template shell if a previously selected template is unavailable.", "Принимает ветку текущего Git-проекта или глобальный ID группа:сессия.\nЗапустить сессию с актуальной версией её шаблона. Активные сессии не меняются.\n--template меняет шаблон остановленной сессии; для активной сессии отклоняется.\nЕсли прежний шаблон недоступен, используйте --template shell.")
+	start.Long = tr("Accept a worktree name in the current Git project or a global group:session ID.\nStart using the session's current named template. Active sessions are unchanged.\n--template changes a stopped session's template; it is rejected for an active session.\nUse --template shell if a previously selected template is unavailable.", "Принимает имя worktree текущего Git-проекта или глобальный ID группа:сессия.\nЗапустить сессию с актуальной версией её шаблона. Активные сессии не меняются.\n--template меняет шаблон остановленной сессии; для активной сессии отклоняется.\nЕсли прежний шаблон недоступен, используйте --template shell.")
 	operation := func(action string) *cobra.Command {
 		short := tr("Stop terminals, preserving files", "Остановить терминалы, сохранив файлы")
 		if action == "delete" {
 			short = tr("Stop and remove worktrees, preserving Git branches", "Остановить и удалить worktree, сохранив Git-ветки")
 		}
-		c := &cobra.Command{Use: action + " <branch|id> | --all", Short: short, Args: cobra.MaximumNArgs(1)}
-		c.Long = tr("Accept a branch in the current Git project or a global group:session ID.\n--all targets only the current project or directory. Managed and ordinary sessions\nkeep their records when stopped; legacy source records are retired after stopping.\nSource/external worktree directories and Git branches are always preserved.", "Принимает ветку текущего Git-проекта или глобальный ID группа:сессия.\n--all действует только на текущий проект или папку. При остановке записи задач\nи обычных терминалов сохраняются; старые исходные записи убираются.\nПапки исходных/внешних worktree и Git-ветки всегда сохраняются.")
+		c := &cobra.Command{Use: action + " <name|id> | --all", Short: short, Args: cobra.MaximumNArgs(1)}
+		c.Long = tr("Accept a worktree name in the current Git project or a global group:session ID.\n--all targets only the current project or directory. Managed and ordinary sessions\nkeep their records when stopped; legacy source records are retired after stopping.\nSource/external worktree directories and Git branches are always preserved.", "Принимает имя worktree текущего Git-проекта или глобальный ID группа:сессия.\n--all действует только на текущий проект или папку. При остановке записи задач\nи обычных терминалов сохраняются; старые исходные записи убираются.\nПапки исходных/внешних worktree и Git-ветки всегда сохраняются.")
 		if action == "delete" {
-			c.Long += tr("\nDelete removes managed worktrees and records, or just plain/temporary terminal\nrecords in Git or ordinary directory groups, preserving their directory files. Modified/untracked files require --force; ignored files are\nremoved with the task worktree. Noninteractive deletion requires --yes.", "\nУдаление убирает worktree задачи и запись; у обычных и временных терминалов\nв Git и других папках удаляется только запись, файлы папки сохраняются. Изменённые/неотслеживаемые файлы требуют --force; игнорируемые файлы\nудаляются с worktree задачи. Для неинтерактивного удаления нужен --yes.")
+			c.Long += tr("\nDelete removes managed worktrees and records, or just plain/temporary terminal\nrecords in Git or ordinary directory groups, preserving their directory files. Modified/untracked files require --force; ignored files are\nremoved with the worktree. A detached commit outside the history of all local\nbranches, remote-tracking branches and tags also requires --force. Save it with\ngit switch -c <branch> before deletion. Noninteractive deletion requires --yes.", "\nУдаление убирает worktree задачи и запись; у обычных и временных терминалов\nв Git и других папках удаляется только запись, файлы папки сохраняются. Изменённые/неотслеживаемые файлы требуют --force; игнорируемые файлы\nудаляются с worktree. Если текущий коммит дерева без ветки не входит в историю\nлокальной ветки, ветки удалённого репозитория или тега, также требуется --force.\nСохраните коммит через git switch -c <ветка>. Для неинтерактивного удаления нужен --yes.")
 		}
 		c.Flags().Bool("all", false, tr("All sessions in the current project or directory", "Все сессии текущего проекта или папки"))
 		c.Flags().Bool("yes", false, tr("Skip confirmation", "Пропустить подтверждение"))
 		if action == "delete" {
-			c.Flags().Bool("force", false, tr("Explicitly allow losing uncommitted worktree files", "Явно разрешить потерю незакоммиченных файлов"))
+			c.Flags().Bool("force", false, tr("Allow loss of uncommitted files or unreferenced detached commits", "Разрешить потерю незакоммиченных файлов или коммитов вне веток и тегов"))
 		}
 		c.RunE = func(cmd *cobra.Command, args []string) error {
 			all, _ := cmd.Flags().GetBool("all")
@@ -263,7 +316,7 @@ func newCLI() *cobra.Command {
 				force, _ = cmd.Flags().GetBool("force")
 			}
 			if (all && len(args) > 0) || (!all && len(args) == 0) {
-				return errors.New(tr("specify a branch, group:session ID, or --all", "укажите ветку, ID группа:сессия или --all"))
+				return errors.New(tr("specify a worktree name, group:session ID, or --all", "укажите имя worktree, ID группа:сессия или --all"))
 			}
 			var p *Project
 			var err error
@@ -350,6 +403,9 @@ func newCLI() *cobra.Command {
 	}}
 	dashboard.Long = tr("Show saved folder sections and sessions in one dashboard process.\nLaunch creates no session, opens no terminal and does not add the calling\ndirectory. Press + to add an existing directory using a path or folder browser.\nSections may refer to different directories in the same Git repository.\nOn a section, T creates a persistent shell in its exact directory, N creates a\nworktree in Git or a directory session, and X removes an empty section.\nSessions share one list with worktree/terminal marks. Enter or a single click\nopens a session; stopped sessions start. Ctrl+W cycles the list and panes.\nQ or disconnection closes the dashboard and preserves persistent terminals.", "Показать сохранённые разделы-папки и сессии в одном процессе dashboard.\nЗапуск не создаёт сессий, не открывает терминал и не добавляет папку вызова.\nНажмите +, чтобы добавить существующую папку через поле пути или обзор папок.\nРазделы могут указывать на разные папки одного Git-репозитория.\nНа разделе T создаёт постоянный shell точно в его папке, N создаёт worktree\nв Git или обычную сессию, X убирает пустой раздел.\nСессии показаны общим списком с обозначением worktree/терминала. Enter или\nодин клик открывает сессию; остановленная сессия запускается. Ctrl+W переключает\nсписок и панели. Q и отключение закрывают dashboard, сохраняя постоянные терминалы.")
 	dashboard.Long += tr("\n\nRight-click, ? or Shift+F10 opens target actions. Hover previews details.\nS/D on a section confirms Stop all/Delete all for that section's fixed targets;\nGit branches, protected worktrees and ordinary directory files remain.\nSearch (/) is available above ten activity-filtered session rows. Down/Enter\napplies search; Esc clears it. Forms support mouse and keyboard. The folder\nbrowser accepts relative paths and ~/; Ctrl+S adds the selected directory.", "\n\nПравая кнопка, ? или Shift+F10 открывает действия; наведение показывает детали.\nS/D на разделе подтверждает остановку/удаление его фиксированного набора сессий;\nGit-ветки, защищённые worktree и файлы обычных папок сохраняются.\nПоиск (/) доступен при числе сессий больше десяти после фильтра активности.\nDown/Enter применяет поиск; Esc очищает. Формы поддерживают мышь и клавиатуру.\nОбзор папок принимает относительные пути и ~/; Ctrl+S добавляет выбранную папку.")
+
+	dashboard.Long += tr("\nGit worktree creation shows an animated row while files copy. You can use\nother terminals or quit while it runs. Stay on the row to open it when ready.\nOn failure, press Enter on the row to retry with the saved form.\n", "\nСоздание Git-worktree показывает строку с анимацией копирования. Пока оно идёт,\nможно работать в другом терминале или выйти. Останьтесь на строке, чтобы открыть\nготовую сессию. При ошибке Enter вернёт заполненную форму для повтора.\n")
+	dashboard.Long += tr("\nOn a Git section, R enables relative worktree paths for the whole project.\nConfirm that the host and all other Git clients use Git 2.48 or newer.", "\nНа Git-разделе R включает относительные пути worktree для всего проекта.\nПодтвердите, что на хосте и у всех остальных клиентов установлен Git 2.48 или новее.")
 
 	root.AddCommand(initCmd, create, list, start, operation("stop"), operation("delete"), dashboard, configCommand(project, cfg), settingCommand(project, cfg, false), settingCommand(project, cfg, true), templateCommand(project, cfg))
 	addInternal(root)
@@ -578,7 +634,7 @@ func addInternal(root *cobra.Command) {
 		if err != nil {
 			return err
 		}
-		branch, name, err := promptCreate(p, cfg, "", "", false)
+		values, err := promptCreate(p, cfg, createValues{}, false)
 		if errors.Is(err, errCancelled) {
 			return nil
 		}
@@ -589,7 +645,7 @@ func addInternal(root *cobra.Command) {
 		if cwd == "" {
 			cwd = p.Root
 		}
-		t, err := p.Create(cwd, branch, "", false, name)
+		t, err := p.Create(cwd, values.name, values.branch, "", false, values.template)
 		if err != nil {
 			p.notice(err.Error())
 			return nil
@@ -603,6 +659,20 @@ func addInternal(root *cobra.Command) {
 	})
 	form.Flags().String("cwd", "", "Calling worktree")
 	form.Flags().String("result", "", "Result file")
+	creation := internal("_prepare-worktree", func(p *Project, cmd *cobra.Command) error {
+		id, _ := cmd.Flags().GetInt("job")
+		recovery, _ := cmd.Flags().GetBool("recover")
+		return p.runWorktreeWorker(id, recovery)
+	})
+	creation.Flags().Int("job", 0, "Reserved worktree ID")
+	creation.Flags().Bool("recover", false, "Recover an interrupted creation")
+	checkout := internal("_checkout-worktree", func(p *Project, cmd *cobra.Command) error {
+		id, _ := cmd.Flags().GetInt("job")
+		return p.withWorkerLease(id, func(j *worktreeJob, _ *os.File) error {
+			return p.claimCheckout(j)
+		})
+	})
+	checkout.Flags().Int("job", 0, "Reserved worktree ID")
 	worker := internal("_operate", func(p *Project, cmd *cobra.Command) error {
 		ids, _ := cmd.Flags().GetIntSlice("id")
 		action, _ := cmd.Flags().GetString("action")

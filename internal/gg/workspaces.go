@@ -39,8 +39,9 @@ type workspaceCatalog struct {
 type sessionGroup struct {
 	Project   *Project
 	State     *State
+	Jobs      []worktreeJob
 	Snap      Snapshot
-	Git       map[string]string
+	Git       gitCache
 	Err       error
 	View      WorkspaceView
 	Workspace int
@@ -257,10 +258,10 @@ func collectGroups(git bool) ([]sessionGroup, error) {
 	if err != nil {
 		return nil, err
 	}
-	return collectWorkspaceGroups(c.Workspaces, git), nil
+	return collectWorkspaceGroups(c.Workspaces, git, false), nil
 }
 
-func collectWorkspaceGroups(workspaces []workspaceRecord, git bool) []sessionGroup {
+func collectWorkspaceGroups(workspaces []workspaceRecord, git, withJobs bool) []sessionGroup {
 	sort.Slice(workspaces, func(i, j int) bool {
 		a, b := workspaces[i], workspaces[j]
 		x, y := strings.ToLower(filepath.Base(a.Root)), strings.ToLower(filepath.Base(b.Root))
@@ -280,6 +281,11 @@ func collectWorkspaceGroups(workspaces []workspaceRecord, git bool) []sessionGro
 			defer func() { <-limit }()
 			g := sessionGroup{View: r.view()}
 			g.Project, g.Err = r.project()
+			// Read jobs first so a worktree committed during this refresh is
+			// visible as either an operation or a ready session.
+			if withJobs && g.Err == nil && !g.Project.Directory {
+				g.Jobs, g.Err = g.Project.worktreeJobs()
+			}
 			if g.Err == nil {
 				g.State, g.Err = g.Project.currentState("")
 			}
@@ -335,7 +341,7 @@ func resolveSession(arg string) (*Project, *Task, error) {
 	if byID {
 		t, err = taskByID(s, id)
 	} else {
-		t, err = taskByBranch(s, arg)
+		t, err = taskByWorktreeName(s, arg)
 	}
 	return p, t, err
 }

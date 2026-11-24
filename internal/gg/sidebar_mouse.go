@@ -64,6 +64,9 @@ func (m sidebar) mouseClick(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if !target.Folder {
+				if m.job(&target) != nil {
+					return m.dispatch("enter", &target)
+				}
 				return m.perform(popupAction{Kind: "open", Workspace: target.Group, ID: target.ID, Client: client})
 			}
 			return m, nil

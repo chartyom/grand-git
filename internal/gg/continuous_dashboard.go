@@ -51,6 +51,7 @@ type continuousDashboard struct {
 	form          *createForm
 	formProject   *Project
 	formCWD       string
+	openWhenReady *listTarget
 	launchCWD     string
 	folderForm    *sectionForm
 	outerSocket   string
@@ -199,6 +200,7 @@ func (m continuousDashboard) open(a popupAction) (tea.Model, tea.Cmd) {
 }
 
 func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
+	m.openWhenReady = nil
 	switch a.Kind {
 	case "detach":
 		return m, tea.Quit
@@ -215,6 +217,22 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 		}
 		m.side.message = ""
 		return m, requestSidebarRefresh
+	case "relative-paths":
+		m.side.message = ""
+		return m, effect(func() error {
+			_, target, err := sectionByID(a.Section)
+			if err != nil {
+				return err
+			}
+			if target.WorkspaceID != a.Workspace || target.Directory {
+				return errors.New(m.side.cfg.text("Git project no longer matches this section", "Раздел больше не соответствует выбранному Git-проекту"))
+			}
+			if err := target.enableRelativeWorktrees(); err != nil {
+				return err
+			}
+			target.setNotice(m.side.cfg.text("Relative worktree paths enabled", "Относительные пути worktree включены"), true)
+			return nil
+		})
 	case "terminal":
 		section, target, err := sectionByID(a.Section)
 		if err != nil {
@@ -230,7 +248,7 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 		m.side.onlyActive = false
 		m.side.cursorID, m.side.cursorGroup, m.side.cursorFolder = t.ID, a.Section, false
 		return m.open(popupAction{Kind: "open", Workspace: a.Workspace, ID: t.ID})
-	case "create":
+	case "create", "retry-worktree":
 		target := m.project
 		if a.Workspace > 0 && a.Workspace != target.WorkspaceID {
 			var err error
@@ -249,7 +267,15 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 			}
 			target, cwd = resolved, section.Path
 		}
-		if a.ID >= 0 {
+		var retry *worktreeJob
+		if a.Kind == "retry-worktree" {
+			retry = m.side.job(&listTarget{Group: a.Section, ID: a.ID})
+			if retry == nil || retry.Phase != "failed" {
+				m.side.message = m.side.cfg.text("Creation is no longer available to retry", "Создание больше нельзя повторить")
+				return m, requestSidebarRefresh
+			}
+			cwd = retry.CWD
+		} else if a.ID >= 0 {
 			state, err := target.load()
 			if err != nil {
 				m.side.message = err.Error()
@@ -270,7 +296,7 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		form := newCreateForm(cfg)
-		form.p = target
+		form.setProject(target)
 		form.context = target.workspaceView().Name + " · " + cwd
 		if !target.Directory {
 			form.base, _ = command(cwd, "git", "symbolic-ref", "--short", "HEAD")
@@ -279,8 +305,12 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 			}
 		}
 		if target.Directory {
-			form.labels[0] = cfg.text("Name (optional)", "Имя (необязательно)")
 			form.inputs[0].SetValue(filepath.Base(cwd))
+		}
+		if retry != nil {
+			form.inputs[0].SetValue(retry.Name)
+			form.inputs[1].SetValue(retry.Branch)
+			form.template, form.message, form.retryID = retry.Template, retry.Error, retry.ID
 		}
 		m.form, m.formProject, m.formCWD = &form, target, cwd
 		m.sizeForm()
@@ -316,6 +346,14 @@ func (m continuousDashboard) action(a popupAction) (tea.Model, tea.Cmd) {
 }
 
 func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	return next.(continuousDashboard).finishCreation(cmd)
+}
+
+func (m continuousDashboard) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(worktreeQueuedMsg); ok {
+		return m.worktreeQueued(msg)
+	}
 	if _, ok := msg.(directFrameMsg); ok {
 		if terminalDisconnected() {
 			return m, tea.Quit
@@ -326,6 +364,7 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		}
+		m.side.spinnerFrame = (m.side.spinnerFrame + 1) % len(worktreeSpinner)
 		m.captureTerminalFrame()
 		if len(m.frame) == 0 {
 			m.listFocus, m.side.active = true, true
@@ -362,6 +401,9 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.captureTerminalFrame()
 			return m, resetViewport()
 		}
+		if m.form.done {
+			return m, nil
+		}
 		if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "ctrl+w" {
 			return m, nil
 		}
@@ -372,8 +414,6 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if strings.HasPrefix(h.key, "template:") {
 						m.form.choice, _ = strconv.Atoi(strings.TrimPrefix(h.key, "template:"))
 						msg = commandKey("enter")
-					} else if h.key == "name" {
-						return m, m.form.inputs[0].Focus()
 					} else {
 						msg = commandKey(h.key)
 					}
@@ -392,8 +432,11 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, requestSidebarRefresh
 		}
 		if updated.done {
-			name := strings.TrimSpace(updated.inputs[0].Value())
-			task, err := m.formProject.Create(m.formCWD, name, "", false, updated.template)
+			if !m.formProject.Directory {
+				return m, m.queueWorktree()
+			}
+			v := updated.values()
+			task, err := m.formProject.Create(m.formCWD, v.name, v.branch, "", false, v.template)
 			if err != nil {
 				m.form.done = false
 				m.form.message = err.Error()
@@ -421,6 +464,8 @@ func (m continuousDashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 normalInput:
 	switch msg := msg.(type) {
+	case actionMsg:
+		return m.updateSidebar(msg)
 	case directActionMsg:
 		return m.action(msg.action)
 	case tea.WindowSizeMsg:
@@ -803,6 +848,11 @@ func (m continuousDashboard) statusLine(width int) string {
 		left = " Grand Git · " + oneLine(filepath.Base(m.project.Root)) + " │ "
 	}
 	right := m.side.cfg.text("Active", "Активно") + " " + strconv.Itoa(active) + "/" + strconv.Itoa(total) + " · Ctrl+W " + m.side.cfg.text("Next", "Далее") + " "
+	if compact(m.width, m.height) && !m.listFocus {
+		if progress := m.side.worktreeProgress(); progress != "" {
+			right = progress + " · " + right
+		}
+	}
 	right = ansi.Truncate(right, width, "")
 	left = ansi.Truncate(left, max(0, width-ansi.StringWidth(right)), "")
 	line := left + strings.Repeat(" ", max(0, width-ansi.StringWidth(left)-ansi.StringWidth(right))) + right

@@ -88,7 +88,8 @@ func TestMalformedConfigurationIsPreserved(t *testing.T) {
 func TestLegacyStatusAndFilteredSessionList(t *testing.T) {
 	p := &Project{Dir: t.TempDir()}
 	m := newSidebar(p, 1)
-	m.state = &State{Tasks: []*Task{{ID: 0, Branch: "main", Protected: true}, {ID: 1, Branch: "feat/login"}, {ID: 2, Branch: "fix/logout"}}}
+	m.state = &State{Tasks: []*Task{{ID: 0, Branch: "main", Protected: true}, {ID: 1, Branch: "clone1"}, {ID: 2, Branch: "fix/logout"}}}
+	m.git.Branches = map[string]string{"1": "feat/login"}
 	m.snap = Snapshot{{ID: "%1", Task: "1", Command: "sh"}}
 	m.width, m.height = 60, 40
 	for i := 3; i < 12; i++ {
@@ -96,8 +97,12 @@ func TestLegacyStatusAndFilteredSessionList(t *testing.T) {
 	}
 	m.query = "LOGIN"
 	m.setState(m.state)
-	if len(m.rows()) != 1 || m.selectedTask().Branch != "feat/login" {
+	if len(m.rows()) != 1 || m.selectedTask().label() != "clone1" {
 		t.Fatal("branch search failed")
+	}
+	m.query = "CLONE"
+	if len(m.rows()) != 1 || m.rows()[0].ID != 1 {
+		t.Fatal("worktree name search failed")
 	}
 	m.query = ""
 	m.onlyActive = true

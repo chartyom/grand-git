@@ -15,15 +15,18 @@ func (m sidebar) displayName(t *Task) string {
 	return oneLine(t.label())
 }
 
+func (m sidebar) gitSnapshot(t *Task) gitCache {
+	if g := m.group(t.Group); g != nil {
+		return g.Git
+	}
+	return m.git
+}
+
 func (m sidebar) gitState(t *Task) string {
 	if t.plain() {
 		return "n/a"
 	}
-	git := m.git
-	if g := m.group(t.Group); g != nil {
-		git = g.Git
-	}
-	if value := git[strconv.Itoa(t.ID)]; value != "" {
+	if value := m.gitSnapshot(t).States[strconv.Itoa(t.ID)]; value != "" {
 		return value
 	}
 	return "unknown"
@@ -107,7 +110,10 @@ func (m sidebar) shortcuts() []shortcut {
 				items = append(items, shortcut{"N", m.cfg.text("New session", "Новая сессия")})
 			}
 			items = append(items, shortcut{"T", m.cfg.text("New terminal here", "Новый терминал в папке")})
-			if g.Section > 0 && g.Err == nil && g.State != nil && len(g.State.Tasks) == 0 {
+			if m.direct && g.Section > 0 && g.View.Type == "git" && g.Err == nil {
+				items = append(items, shortcut{"R", m.cfg.text("Enable relative worktree paths", "Включить относительные пути worktree")})
+			}
+			if g.Section > 0 && g.Err == nil && g.State != nil && len(g.State.Tasks) == 0 && !g.hasPendingWorktree() {
 				items = append(items, shortcut{"X", m.cfg.text("Remove section", "Убрать раздел")})
 			}
 			if g.State != nil {
@@ -121,6 +127,10 @@ func (m sidebar) shortcuts() []shortcut {
 					items = append(items, shortcut{"D", m.cfg.text("Delete all sessions", "Удалить все сессии")})
 				}
 			}
+		}
+	} else if job := m.job(target); job != nil {
+		if job.Phase == "failed" {
+			items = append(items, shortcut{"Enter", m.cfg.text("Retry creation", "Повторить создание")})
 		}
 	} else {
 		if target != nil || !m.direct {
