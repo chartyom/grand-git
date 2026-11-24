@@ -1,5 +1,10 @@
 # Current verification
 
+## v1.0.3 release (2026-11-24)
+
+- Tag `v1.0.3` points to `367d72b`. The [tagged workflow](https://github.com/chartyom/grand-git/actions/runs/45350166905) passed all 139 integration tests, Go race tests and vet on Linux amd64 and arm64, macOS 15 Intel and macOS 26 Apple Silicon. The Linux amd64 job passed on retry after the legacy temporary-session cleanup test timed out. All eight OpenSpec checks passed.
+- The four GoReleaser v2.10.2 archives matched their SHA-256 checksums, expected platforms, source revision and tagged documentation. The installer upgraded v1.0.1 to v1.0.3 using the downloaded draft artifacts. The installed Linux amd64 binary reported `367d72b` and passed five named-worktree, flat-path, background-copy and relative-link compatibility cases. The [published release](https://github.com/chartyom/grand-git/releases/tag/v1.0.3) also passed a fresh installation through the latest stable URL.
+
 ## v1.0.2 release preparation (2026-11-24)
 
 - The Linux amd64 release candidate passed the Go build, Go tests, vet and all 139 Python integration tests on Git 2.43.0 and tmux 3.4. All 29 Chromium prototype tests and eight strict OpenSpec checks passed. GoReleaser v2.10.2 validated the release configuration.
