@@ -86,6 +86,8 @@ exec {git} "$@"
             wait_for(lambda: "[T] Terminal" in self.screen())
             self.press(b"t")
             wait_for(lambda: len([row for row in self.public_tasks() if row["path"] == str(other)]) == 2)
+            wait_for(lambda: any(line[:40].strip() == f"▸ ● >_ {other.name}"
+                                 for line in self.screen().splitlines()))
             self.click("reader", sidebar=True)
             wait_for(lambda: self.worktree_status_row("reader", "▸ ●"))
             self.press(b"printf one > while-copying\r")

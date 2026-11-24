@@ -50,7 +50,9 @@ class DashboardScreenFixture(SessionFixture):
         return self.run_cmd("tmux", "-L", self.outer, *args)
 
     def launch(self, width=160, height=42):
-        self.outer_tmux("-f", "/dev/null", "new-session", "-d", "-s", "preview", "-c", str(self.root))
+        # Keep the fixture PATH ahead of system tools in the outer tmux shell.
+        self.outer_tmux("-f", "/dev/null", "new-session", "-d", "-s", "preview", "-c", str(self.root),
+                        "/bin/sh", "-i")
         self.proc, self.master = self.start_client(["tmux", "-L", self.outer, "attach-session", "-t", "preview"])
         self.resize_client(self.proc, self.master, width, height)
         self.outer_tmux("send-keys", "-t", "preview:0", shlex.quote(str(BIN)) + " dashboard", "Enter")

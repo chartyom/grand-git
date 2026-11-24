@@ -5,6 +5,10 @@
 - The Linux amd64 release candidate passed the Go build, Go tests, vet and all 139 Python integration tests on Git 2.43.0 and tmux 3.4. All 29 Chromium prototype tests and eight strict OpenSpec checks passed. GoReleaser v2.10.2 validated the release configuration.
 - The delegated [usage-skill](../docs/skills/grand-git/SKILL.md) review updated the pinned installer example and versioned worktree and dashboard guidance. The reviewer checked CLI and installer help, passed 29 isolated CLI, PTY and installer fixture cases, and passed three additional worktree cases on native Git 2.31.0.
 
+## v1.0.3 release preparation (2026-11-24)
+
+- An isolated shell with a profile that reorders `PATH` reproduced the macOS CI failure to reach the Git test shims. The tmux fixture preserved the shims with an interactive non-login shell, and the 19 affected design, copy and checkout interruption cases passed locally. The terminal-switch test waited for the newly opened row before calculating click coordinates and passed 12 consecutive runs against the packaged CLI.
+
 ## Background worktree preparation (2026-11-24)
 
 - On Linux with Git 2.43.0 and tmux 3.4, the original dashboard kept its creation form open while an ignored-file listing was paused. Opening another session in the same project waited for the copy. The [dashboard preparation tests](../tests/test_worktree_preparation.py) held a real copy after writing an ignored dependency. The pending row changed frames while another section created a shell and a previously stopped session accepted terminal input. The startup template read the completed copy, and the active terminal kept its PID and focus.
